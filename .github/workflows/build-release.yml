@@ -92,7 +92,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/') || github.ref == 'refs/heads/main'
         with:
-          tag_name: ${{ github.ref_type == 'tag' && github.ref_name || 'latest' }}
+          tag_name: ${{ github.ref_type == 'tag' && github.ref_name || env.VERSION_NAME }}
           name: ${{ github.ref_type == 'tag' && github.ref_name || format('Echo {0}', env.VERSION_NAME) }}
           draft: false
           prerelease: false
