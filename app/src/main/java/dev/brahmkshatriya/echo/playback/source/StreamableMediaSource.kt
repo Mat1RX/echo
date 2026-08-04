@@ -94,7 +94,8 @@ class StreamableMediaSource(
         
         // Check for offline partial cache
         val isOffline = app.networkFlow.value == NetworkConnection.NotConnected
-        val hasCacheRecord = app.context.getFromCache<String>(key, "player") != null
+        val cachedUri = app.context.getFromCache<String>(key, "player")
+        val hasCacheRecord = cachedUri != null && !cachedUri.startsWith("raw:")
         val forceCache = isFullyCached || (isOffline && hasCacheRecord)
         
         // Fallback to reading from the disk cache if it's already cached or if we're offline,

@@ -48,6 +48,12 @@ class StreamableDataSource(
 
     override fun open(dataSpec: DataSpec): Long {
         Log.d("EchoPlayback", "StreamableDataSource.open: ${dataSpec.uri}")
+        // Prevent raw:// URIs from reaching DefaultHttpDataSource/java.net.URL and throwing uncaught MalformedURLException
+        if (dataSpec.uri.scheme == "raw" || dataSpec.uri.toString().startsWith("raw:")) {
+            if (dataSpec.customData !is Result<*> && dataSpec.customData !is Streamable.Source.Raw) {
+                throw java.io.IOException("Invalid raw URI without customData: ${dataSpec.uri}")
+            }
+        }
         val result = dataSpec.customData as? Result<*>
         val (factory, spec) = when (result) {
             null -> defaultDataSourceFactory to dataSpec
@@ -56,6 +62,9 @@ class StreamableDataSource(
                         dataSpec.copy(uri = streamable.uri, customData = streamable)
 
                 is Streamable.Source.Http -> {
+                    if (streamable.request.url.startsWith("raw:")) {
+                        throw java.io.IOException("Invalid raw URL in Streamable.Source.Http: ${streamable.request.url}")
+                    }
                     val spec = streamable.request.run {
                         defaultHttpDataSourceFactory.value.setDefaultRequestProperties(headers)
                         dataSpec.copy(uri = url.toUri(), httpRequestHeaders = headers)

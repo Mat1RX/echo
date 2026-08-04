@@ -34,10 +34,12 @@ class StreamableResolver(
                 if (!it.isLive) {
                     if (sourceUri.isNullOrEmpty()) {
                         val cached = context.getFromCache<String>(originalKey, "player")
-                        if (cached != null) {
+                        // Ignore synthetic raw:// URIs from disk cache
+                        if (cached != null && !cached.startsWith("raw:")) {
                             finalUri = Uri.parse(cached)
                         }
-                    } else {
+                    } else if (it !is Streamable.Source.Raw && !sourceUri.startsWith("raw:")) {
+                        // Do not cache synthetic raw:// URIs as network URL strings
                         context.saveToCache(originalKey, sourceUri, "player")
                     }
                 }
@@ -54,7 +56,7 @@ class StreamableResolver(
         for (i in 0..20) {
             val altKey = metadataKey(id, i, 0, extensionId)
             val cachedUri = context.getFromCache<String>(altKey, "player")
-            if (cachedUri != null) {
+            if (cachedUri != null && !cachedUri.startsWith("raw:")) {
                 return dataSpec.copy(
                     uri = Uri.parse(cachedUri),
                     key = altKey, // Use the key that was used when caching

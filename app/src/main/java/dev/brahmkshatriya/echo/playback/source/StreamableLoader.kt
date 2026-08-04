@@ -68,8 +68,10 @@ class StreamableLoader(
             val sourceIdx = mediaItem.sourceIndex
             val key = metadataKey(track.id, serverIdx, sourceIdx, extId)
             val cachedUri = app.context.getFromCache<String>(key, "player")
+            // Ignore synthetic raw:// URIs from disk cache
+            val validCachedUri = if (cachedUri != null && !cachedUri.startsWith("raw:")) cachedUri else null
             if (cache.isFullyCached(key)) {
-                return mediaItem to Result.success(Streamable.Media.Server(listOf((cachedUri ?: "").toSource()), false))
+                return mediaItem to Result.success(Streamable.Media.Server(listOf((validCachedUri ?: "").toSource()), false))
             }
             return null
         }
@@ -78,13 +80,15 @@ class StreamableLoader(
         for (i in streamables.indices) {
             val key = metadataKey(track.id, i, 0, extId)
             val cachedUri = app.context.getFromCache<String>(key, "player")
-            if (cache.isFullyCached(key) || (app.networkFlow.value == NetworkConnection.NotConnected && cachedUri != null)) {
+            // Ignore synthetic raw:// URIs from disk cache
+            val validCachedUri = if (cachedUri != null && !cachedUri.startsWith("raw:")) cachedUri else null
+            if (cache.isFullyCached(key) || (app.networkFlow.value == NetworkConnection.NotConnected && validCachedUri != null)) {
                 val loadedMediaItem = if (mediaItem.isLoaded) mediaItem else {
                     val loadedState = cachedMetadata ?: return null
                     MediaItemUtils.buildLoaded(app, downloadFlow.value, mediaItem, loadedState)
                 }
                 val newMediaItem = MediaItemUtils.buildServer(loadedMediaItem, i)
-                return newMediaItem to Result.success(Streamable.Media.Server(listOf((cachedUri ?: "").toSource()), false))
+                return newMediaItem to Result.success(Streamable.Media.Server(listOf((validCachedUri ?: "").toSource()), false))
             }
         }
         return null
@@ -170,7 +174,8 @@ class StreamableLoader(
                 // StreamableResolver will do the actual recovery using the disk cache key.
                 for (i in servers.indices) {
                     val key = metadataKey(mediaItem.track.id, index, i, mediaItem.extensionId)
-                    if (app.context.getFromCache<String>(key, "player") != null) {
+                    val cachedUri = app.context.getFromCache<String>(key, "player")
+                    if (cachedUri != null && !cachedUri.startsWith("raw:")) {
                         return@recoverCatching Streamable.Media.Server(listOf("".toSource()), false)
                     }
                 }

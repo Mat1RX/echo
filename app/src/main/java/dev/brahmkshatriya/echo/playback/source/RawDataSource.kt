@@ -52,7 +52,17 @@ class RawDataSource : BaseDataSource(true) {
     }
 
     override fun read(buffer: ByteArray, offset: Int, length: Int): Int {
-        return stream!!.read(buffer, offset, length)
+        // If the loader thread was interrupted (e.g. during a quality switch or track skip),
+        // throw InterruptedIOException to prevent returning EOF (-1) or partial data that could
+        // trigger an illegal commit in SimpleCache.
+        if (Thread.interrupted()) {
+            throw java.io.InterruptedIOException("Loader thread was interrupted before read")
+        }
+        val bytesRead = stream!!.read(buffer, offset, length)
+        if (Thread.interrupted()) {
+            throw java.io.InterruptedIOException("Loader thread was interrupted during read")
+        }
+        return bytesRead
     }
 
     override fun getUri() = uri
