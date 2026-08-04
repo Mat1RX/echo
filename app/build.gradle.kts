@@ -26,7 +26,7 @@ val hasGoogleServices = file("google-services.json").let { f ->
 val gitHash = runCatching { execute("git", "rev-parse", "HEAD").take(7) }.getOrDefault("dev")
 val gitCount = runCatching { execute("git", "rev-list", "--count", "HEAD").toInt() }.getOrDefault(1)
 val isDirty = runCatching { execute("git", "status", "--porcelain", "-uno").isNotEmpty() }.getOrDefault(false)
-val version = "3.0.$gitCount"
+val version = runCatching { execute("git", "describe", "--tags", "--abbrev=0").removePrefix("v") }.getOrDefault("4.74")
 
 android {
     namespace = "dev.brahmkshatriya.echo"

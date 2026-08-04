@@ -61,7 +61,7 @@ jobs:
               --out app/build/outputs/apk/release/app-release.apk \
               app/build/outputs/apk/release/app-release-unsigned.apk
             rm -f release.keystore
-          elif [ ! -f "app/build/outputs/apk/release/app-release.apk" ] && [ -f "app/build/outputs/apk/release/app-release-unsigned.apk" ]; then
+          elif [ ! -f "app/build/outputs/apk/release/app-release.apk" ] && [ -f "app/build/outputs/apk/release/app-release.apk" ]; then
             echo "No custom keystore secret found. Signing release APK with debug key fallback..."
             keytool -genkey -v -keystore debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
             $BUILD_TOOLS/apksigner sign --ks debug.keystore --ks-pass pass:android --key-pass pass:android --out app/build/outputs/apk/release/app-release.apk app/build/outputs/apk/release/app-release-unsigned.apk
@@ -71,8 +71,13 @@ jobs:
       - name: Prepare APK Artifact Names
         id: prepare_apks
         run: |
-          GIT_COUNT=$(git rev-list --count HEAD || echo "1")
-          VERSION_NAME="v3.0.${GIT_COUNT}"
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            VERSION_NAME="${{ github.ref_name }}"
+          else
+            LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v4.75")
+            GIT_COUNT=$(git rev-list --count HEAD || echo "1")
+            VERSION_NAME="${LATEST_TAG}.${GIT_COUNT}"
+          fi
           
           mkdir -p release_assets
           cp app/build/outputs/apk/release/app-release.apk "release_assets/Echo-${VERSION_NAME}-release.apk"
@@ -88,12 +93,12 @@ jobs:
           path: release_assets/*.apk
           retention-days: 14
 
-      - name: Create / Update GitHub Release
+      - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
-        if: startsWith(github.ref, 'refs/tags/') || github.ref == 'refs/heads/main'
+        if: startsWith(github.ref, 'refs/tags/')
         with:
-          tag_name: ${{ github.ref_type == 'tag' && github.ref_name || env.VERSION_NAME }}
-          name: ${{ github.ref_type == 'tag' && github.ref_name || format('Echo {0}', env.VERSION_NAME) }}
+          tag_name: ${{ github.ref_name }}
+          name: Echo ${{ github.ref_name }}
           draft: false
           prerelease: false
           files: release_assets/*.apk
