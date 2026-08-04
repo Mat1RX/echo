@@ -7,9 +7,12 @@ import dev.brahmkshatriya.echo.common.models.Streamable
 import dev.brahmkshatriya.echo.common.models.Track
 import dev.brahmkshatriya.echo.playback.MediaItemUtils.context
 import dev.brahmkshatriya.echo.playback.MediaItemUtils.track
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
-import java.util.WeakHashMap
+import java.util.Collections
+import java.util.LinkedHashMap
+import java.util.concurrent.atomic.AtomicInteger
 
 data class PlayerState(
     val current: MutableStateFlow<Current?> = MutableStateFlow(null),
@@ -17,14 +20,45 @@ data class PlayerState(
     val session: MutableStateFlow<Int> = MutableStateFlow(0)
 ) {
 
-    val servers: WeakHashMap<String, Result<Streamable.Media.Server>> = WeakHashMap()
-    val serverChanged = MutableSharedFlow<Unit>()
+    val servers: MutableMap<String, Result<Streamable.Media.Server>> =
+        Collections.synchronizedMap(LinkedHashMap())
+    val serverChanged = MutableSharedFlow<Unit>(replay = 1)
+    val activeLoadCount = AtomicInteger(0)
+
+    val backgroundCacheProgress = MutableStateFlow<Map<String, Long>>(emptyMap())
+
+    // Single cold-start restore: the queue is read from disk ONCE at service creation
+    // (PlayerService.onCreate) into this Deferred, and shared by every consumer — the app-open apply
+    // (applyRestoreIfCold), resume(), and onPlaybackResumption — so no path runs its own recoverPlaylist
+    // and races another. A null payload means the disk was empty.
+    var restoreDeferred: Deferred<RestoreData?>? = null
+
+    // Set true SYNCHRONOUSLY when onPlaybackResumption is invoked (media-button / system resume) so the
+    // app-open applyRestoreIfCold defers while the framework is about to apply the same queue — a second
+    // setMediaItems tears the timeline down and re-prepares. Plain var, NOT AtomicBoolean: read and
+    // written ONLY on the player's application looper — which is Main, because the player is built on Main
+    // in PlayerService.onCreate (ExoPlayer.Builder defaults its looper to the current thread). It is set
+    // in onPlaybackResumption's synchronous body (Media3 invokes that callback on that looper), read in
+    // applyRestoreIfCold's withContext(Main), and cleared on Main by the timeline listener (success) and
+    // a withContext(Main) in the non-return paths (failure). If the player is ever built off-Main this
+    // invariant breaks and this must become atomic.
+    var resumptionApplying = false
+
+    // Cold-start re-seek latch. Media3 loses the restored startPositionMs when prepare() resolves the
+    // deferred StreamableMediaSource's placeholder->real timeline to the default position (0) — traced in
+    // ExoPlayerImplInternal.resolvePositionForPlaylistChange. Armed at the restore-apply sites
+    // (applyRestoreIfCold / onPlaybackResumption) with the restored current item's (mediaId, savedPositionMs),
+    // consumed at the FIRST STATE_READY in PlayerEventListener, which re-seeks now that the real timeline
+    // exists. mediaId-guarded so a track the user plays during the restore's buffering window can't be seeked
+    // to the stale position. Main-only (same application-looper invariant as resumptionApplying above).
+    var pendingRestoreSeek: Pair<String, Long>? = null
 
     data class Current(
         val index: Int,
         val mediaItem: MediaItem,
         val isLoaded: Boolean,
         val isPlaying: Boolean,
+        val isPlaceholder: Boolean = false,
     ) {
 
         val context by lazy { mediaItem.context }
@@ -53,3 +87,13 @@ data class PlayerState(
         ) : Radio()
     }
 }
+
+// The shared cold-start restore snapshot (see PlayerState.restoreDeferred). One IO read fills it; the
+// app-open apply uses items raw, onPlaybackResumption maps them through withUnloaded for the framework.
+data class RestoreData(
+    val items: List<MediaItem>,
+    val index: Int,
+    val pos: Long,
+    val shuffle: Boolean,
+    val repeat: Int,
+)

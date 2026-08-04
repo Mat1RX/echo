@@ -4,6 +4,8 @@ import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import androidx.core.view.isVisible
+import androidx.lifecycle.findViewTreeLifecycleOwner
+import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.DiffUtil
 import dev.brahmkshatriya.echo.R
 import dev.brahmkshatriya.echo.common.Extension
@@ -12,7 +14,7 @@ import dev.brahmkshatriya.echo.databinding.ItemDownloadBinding
 import dev.brahmkshatriya.echo.databinding.ItemDownloadTaskBinding
 import dev.brahmkshatriya.echo.download.Downloader
 import dev.brahmkshatriya.echo.download.db.models.ContextEntity
-import dev.brahmkshatriya.echo.download.db.models.DownloadEntity
+import dev.brahmkshatriya.echo.download.db.models.DownloadSummary
 import dev.brahmkshatriya.echo.download.db.models.TaskType
 import dev.brahmkshatriya.echo.download.tasks.BaseTask.Companion.getTitle
 import dev.brahmkshatriya.echo.ui.common.ExceptionUtils
@@ -21,8 +23,11 @@ import dev.brahmkshatriya.echo.utils.image.ImageUtils.loadAsCircle
 import dev.brahmkshatriya.echo.utils.image.ImageUtils.loadInto
 import dev.brahmkshatriya.echo.utils.ui.scrolling.ScrollAnimListAdapter
 import dev.brahmkshatriya.echo.utils.ui.scrolling.ScrollAnimViewHolder
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
 
 class DownloadsAdapter(
+    private val downloader: Downloader,
     private val listener: Listener,
 ) : ScrollAnimListAdapter<DownloadsAdapter.Item, DownloadsAdapter.ViewHolder>(
     object : DiffUtil.ItemCallback<Item>() {
@@ -30,7 +35,7 @@ class DownloadsAdapter(
         override fun areItemsTheSame(oldItem: Item, newItem: Item): Boolean {
             return when (oldItem) {
                 is Download -> if (newItem !is Download) false
-                else oldItem.downloadEntity.id == newItem.downloadEntity.id
+                else oldItem.downloadSummary.id == newItem.downloadSummary.id
 
                 is Task -> if (newItem !is Task) false
                 else oldItem.id == newItem.id
@@ -49,6 +54,7 @@ class DownloadsAdapter(
 
     class DownloadViewHolder(
         parent: ViewGroup,
+        private val downloader: Downloader,
         private val listener: Listener,
         private val binding: ItemDownloadBinding = ItemDownloadBinding.inflate(
             LayoutInflater.from(parent.context), parent, false
@@ -58,12 +64,20 @@ class DownloadsAdapter(
             binding.imageView.clipToOutline = true
         }
 
+        var trackJob: Job? = null
         fun bind(item: Download) {
-            val entity = item.downloadEntity
+            val entity = item.downloadSummary
+            trackJob?.cancel()
             binding.apply {
-                val track = entity.track.getOrNull()
-                title.text = track?.title
-                track?.cover.loadInto(imageView, R.drawable.art_music)
+                val cached = downloader.getCachedTrack(entity.id)
+                title.text = cached?.title
+                cached?.cover.loadInto(imageView, R.drawable.art_music)
+                if (cached == null) trackJob =
+                    itemView.findViewTreeLifecycleOwner()?.lifecycleScope?.launch {
+                        val track = downloader.getTrackData(entity.id)
+                        title.text = track?.title
+                        track?.cover.loadInto(imageView, R.drawable.art_music)
+                    }
                 item.extension?.metadata?.icon?.loadAsCircle(
                     extensionIcon, R.drawable.ic_extension
                 ) {
@@ -113,7 +127,7 @@ class DownloadsAdapter(
     sealed interface Item
     data class Download(
         val context: ContextEntity?,
-        val downloadEntity: DownloadEntity,
+        val downloadSummary: DownloadSummary,
         val extension: Extension<*>?,
     ) : Item
 
@@ -130,9 +144,14 @@ class DownloadsAdapter(
     override fun getSpanSize(position: Int, width: Int, count: Int) = 2.coerceAtLeast(count)
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int) = when (viewType) {
-        0 -> DownloadViewHolder(parent, listener)
+        0 -> DownloadViewHolder(parent, downloader, listener)
         1 -> TaskViewHolder(parent)
         else -> throw IllegalArgumentException("Invalid view type")
+    }
+
+    override fun onViewRecycled(holder: ViewHolder) {
+        super.onViewRecycled(holder)
+        if (holder is DownloadViewHolder) holder.trackJob?.cancel()
     }
 
     override fun onBindViewHolder(holder: ViewHolder, position: Int) {

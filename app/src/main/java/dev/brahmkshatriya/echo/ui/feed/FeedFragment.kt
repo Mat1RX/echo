@@ -3,12 +3,14 @@ package dev.brahmkshatriya.echo.ui.feed
 import android.os.Bundle
 import android.view.View
 import androidx.core.view.isVisible
+import androidx.core.view.updatePaddingRelative
 import androidx.fragment.app.Fragment
 import androidx.fragment.app.activityViewModels
 import androidx.fragment.app.commit
 import androidx.fragment.app.replace
 import androidx.fragment.app.viewModels
 import androidx.lifecycle.ViewModel
+import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
 import dev.brahmkshatriya.echo.R
 import dev.brahmkshatriya.echo.common.models.Feed
 import dev.brahmkshatriya.echo.common.models.Shelf
@@ -18,9 +20,13 @@ import dev.brahmkshatriya.echo.extensions.ExtensionUtils.getExtensionOrThrow
 import dev.brahmkshatriya.echo.extensions.cache.Cached
 import dev.brahmkshatriya.echo.extensions.cache.Cached.savingFeed
 import dev.brahmkshatriya.echo.ui.common.GridAdapter.Companion.configureGridLayout
+import dev.brahmkshatriya.echo.ui.common.TvAwareRecyclerView
+import androidx.recyclerview.widget.RecyclerView
+import dev.brahmkshatriya.echo.ui.common.UiViewModel
 import dev.brahmkshatriya.echo.ui.common.UiViewModel.Companion.applyContentInsets
 import dev.brahmkshatriya.echo.ui.common.UiViewModel.Companion.applyInsets
 import dev.brahmkshatriya.echo.ui.common.UiViewModel.Companion.configure
+import dev.brahmkshatriya.echo.utils.ui.UiUtils.dpToPx
 import dev.brahmkshatriya.echo.ui.extensions.login.LoginFragment.Companion.bind
 import dev.brahmkshatriya.echo.ui.feed.FeedAdapter.Companion.getFeedAdapter
 import dev.brahmkshatriya.echo.ui.feed.FeedAdapter.Companion.getTouchHelper
@@ -29,6 +35,7 @@ import dev.brahmkshatriya.echo.ui.main.MainFragment.Companion.applyPlayerBg
 import dev.brahmkshatriya.echo.utils.ContextUtils.observe
 import dev.brahmkshatriya.echo.utils.ui.FastScrollerHelper
 import kotlinx.coroutines.flow.combine
+import org.koin.androidx.viewmodel.ext.android.activityViewModel
 import org.koin.androidx.viewmodel.ext.android.viewModel
 
 class FeedFragment : Fragment(R.layout.fragment_generic_collapsable) {
@@ -80,6 +87,14 @@ class FeedFragment : Fragment(R.layout.fragment_generic_collapsable) {
         binding.extensionIcon.isVisible = false
         binding.toolBar.title = title
         binding.toolBar.subtitle = subtitle
+        // TV rail parity (matches MediaFragment): the collapsable HEADER (appBarLayout) is otherwise
+        // rail-unaware and stretches full-width across the nav rail, while the list already insets via
+        // `combined`. Pad the header start by the rail inset so it lines up with the list. isRail-gated,
+        // so on phone (isRail == false) this observer never registers and the header is untouched.
+        val uiViewModel by activityViewModel<UiViewModel>()
+        if (uiViewModel.isRail) observe(uiViewModel.combined) {
+            binding.appBarLayout.updatePaddingRelative(start = it.start)
+        }
         applyPlayerBg(view) {
             mainBgDrawable.combine(feedData.backgroundImageFlow) { a, b -> b ?: a }
         }
@@ -88,7 +103,7 @@ class FeedFragment : Fragment(R.layout.fragment_generic_collapsable) {
         }
     }
 
-    class Actual() : Fragment(R.layout.fragment_recycler_with_refresh) {
+    class Actual : Fragment(R.layout.fragment_recycler_with_refresh) {
         private val feedData by lazy {
             val vm by requireParentFragment().viewModel<FeedViewModel>()
             vm.feedDataMap.values.first()
@@ -98,23 +113,37 @@ class FeedFragment : Fragment(R.layout.fragment_generic_collapsable) {
         private val feedAdapter by lazy {
             getFeedAdapter(feedData, listener)
         }
+        private var swipeRefresh: SwipeRefreshLayout? = null
+
+        override fun onHiddenChanged(hidden: Boolean) {
+            super.onHiddenChanged(hidden)
+            if (hidden) swipeRefresh?.isRefreshing = false
+        }
 
         override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
             val binding = FragmentRecyclerWithRefreshBinding.bind(view)
-            applyInsets {
-                binding.recyclerView.applyContentInsets(it, 20, 8, 16)
+            val recyclerView = binding.recyclerView as RecyclerView
+            val uiViewModel by activityViewModel<UiViewModel>()
+            applyInsets(uiViewModel.tvMiniPlayerVisible) {
+                val miniExtra = if (isRail && tvMiniPlayerVisible.value) 85.dpToPx(recyclerView.context) else 0
+                recyclerView.applyContentInsets(it, 20, 8, 16 + miniExtra)
             }
-            FastScrollerHelper.applyTo(binding.recyclerView)
+            FastScrollerHelper.applyTo(recyclerView)
             configureGridLayout(
-                binding.recyclerView,
-                feedAdapter.withLoading(this)
+                recyclerView,
+                feedAdapter.withLoading(this),
             )
-            getTouchHelper(listener).attachToRecyclerView(binding.recyclerView)
+            (recyclerView as? TvAwareRecyclerView)?.navRailView =
+                requireActivity().findViewById(R.id.navRailContainer)
+            getTouchHelper(listener).attachToRecyclerView(recyclerView)
+            swipeRefresh = binding.swipeRefresh
             binding.swipeRefresh.run {
                 configure()
                 setOnRefreshListener { feedData.refresh() }
+                var hasEverLoaded = false
                 observe(feedData.isRefreshingFlow) {
-                    isRefreshing = it
+                    if (!it) hasEverLoaded = true
+                    isRefreshing = hasEverLoaded && it
                 }
             }
         }

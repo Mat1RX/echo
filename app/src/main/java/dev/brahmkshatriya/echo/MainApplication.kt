@@ -21,6 +21,9 @@ import dev.brahmkshatriya.echo.di.DI
 import dev.brahmkshatriya.echo.extensions.ExtensionLoader
 import dev.brahmkshatriya.echo.utils.AppShortcuts.configureAppShortcuts
 import dev.brahmkshatriya.echo.utils.CoroutineUtils
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import org.koin.android.ext.android.inject
 import org.koin.android.ext.koin.androidContext
 import org.koin.androidx.workmanager.koin.workManagerFactory
@@ -44,14 +47,19 @@ class MainApplication : Application(), KoinStartup, SingletonImageLoader.Factory
         super.onCreate()
         CoroutineUtils.setDebug()
         applyLocale(settings)
-        configureAppShortcuts(extensionLoader)
+        CoroutineScope(Dispatchers.IO).launch { configureAppShortcuts(extensionLoader) }
     }
 
     override fun newImageLoader(context: PlatformContext): ImageLoader {
         return ImageLoader.Builder(context)
             .memoryCache {
                 MemoryCache.Builder()
-                    .maxSizePercent(context, 0.25)
+                    // 0.15 (≈38MB of a 256MB heap) instead of 0.25 (≈64MB): decoded covers are SOFTWARE
+                    // bitmaps on the Java heap (allowHardware(false), needed by the blur/crop transforms), so
+                    // this cache counts against the heap cap. 0.15 still holds ~75–125 downsampled covers
+                    // (~4–8 screens), so normal browsing never re-decodes; only very deep scroll-back re-decodes
+                    // from the disk cache (fast, no network, no correctness change).
+                    .maxSizePercent(context, 0.15)
                     .build()
             }
             .diskCache {

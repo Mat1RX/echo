@@ -8,6 +8,7 @@ import dev.brahmkshatriya.echo.common.clients.ExtensionClient
 import dev.brahmkshatriya.echo.common.helpers.ClientException
 import dev.brahmkshatriya.echo.common.models.Metadata
 import dev.brahmkshatriya.echo.common.settings.Settings
+import dev.brahmkshatriya.echo.extensions.exceptions.AppException
 import dev.brahmkshatriya.echo.extensions.exceptions.AppException.Companion.toAppException
 import dev.brahmkshatriya.echo.extensions.exceptions.ExtensionNotFoundException
 import dev.brahmkshatriya.echo.utils.ContextUtils.getSettings
@@ -17,6 +18,7 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
+import kotlin.coroutines.cancellation.CancellationException
 
 object ExtensionUtils {
 
@@ -46,15 +48,31 @@ object ExtensionUtils {
     suspend fun <T> Result<T>.getOrThrow(
         throwableFlow: MutableSharedFlow<Throwable>
     ) = getOrElse {
+        // Cooperative cancellation propagates instead of being reported. runCatching upstream
+        // preserves the CancellationException identity in Result.failure, so this catches it here.
+        if (it is CancellationException) throw it
+        // ABI drift: a third-party extension built against an OLDER common interface doesn't implement the
+        // current method signature, so the JVM throws an IncompatibleClassChangeError family member
+        // (AbstractMethodError / NoSuchMethodError / NoSuchFieldError / IllegalAccessError) at call time. That
+        // is "this outdated extension doesn't support this feature", not an app error — degrade SILENTLY
+        // (return null → empty settings / no-op at the call site) instead of a snackbar + Crashlytics non-fatal.
+        // Unwrap first: get() re-wraps the original as AppException.Other(cause = …). Scoped to this one family
+        // so genuine bugs still surface normally.
+        val cause = (it as? AppException)?.cause ?: it
+        if (cause is IncompatibleClassChangeError) return@getOrElse null
         throwableFlow.emit(it)
         it.printStackTrace()
         null
     }
 
+    // The block's return is Any? (not Unit) and discarded — runIf is fire-and-forget. An extension whose
+    // method drifted to return a value (built against a divergent signature) would otherwise force a
+    // `checkcast kotlin/Unit` → fatal "X cannot be cast to Unit". Any? accepts whatever it returns;
+    // callers pass Unit-returning lambdas, which still conform. Fixes every runIf call site at once.
     suspend inline fun <reified C> Extension<*>.runIf(
         throwableFlow: MutableSharedFlow<Throwable>,
-        crossinline block: suspend C.() -> Unit
-    ) { getIf<C, Unit>(block).getOrThrow(throwableFlow) }
+        crossinline block: suspend C.() -> Any?
+    ) { getIf<C, Any?>(block).getOrThrow(throwableFlow) }
 
     suspend inline fun <reified C, R> Extension<*>.getIf(
         throwableFlow: MutableSharedFlow<Throwable>,

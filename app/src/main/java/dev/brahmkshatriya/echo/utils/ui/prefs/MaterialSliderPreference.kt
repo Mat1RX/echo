@@ -34,6 +34,14 @@ class MaterialSliderPreference(
     override fun onBindViewHolder(holder: PreferenceViewHolder) {
         super.onBindViewHolder(holder)
         val slider = holder.itemView.findViewById<Slider>(R.id.preferences_slider)
+        
+        // Remove old listeners to prevent writing to wrong preferences when RecyclerView recycles views
+        slider.clearOnChangeListeners()
+        
+        // Temporarily set stepSize to 0 (continuous) to avoid IllegalStateException when updating bounds 
+        // that might not align with the old stepSize from a recycled view.
+        slider.stepSize = 0f
+
         val current = getPersistedInt(defaultValue ?: from)
         val min = if (allowOverride) min(from, current) else from
         slider.valueFrom = min.toFloat()

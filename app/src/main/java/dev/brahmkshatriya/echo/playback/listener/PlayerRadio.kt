@@ -10,6 +10,7 @@ import dev.brahmkshatriya.echo.common.MusicExtension
 import dev.brahmkshatriya.echo.common.clients.RadioClient
 import dev.brahmkshatriya.echo.common.models.EchoMediaItem
 import dev.brahmkshatriya.echo.common.models.Feed.Companion.pagedDataOfFirst
+import dev.brahmkshatriya.echo.common.models.Radio
 import dev.brahmkshatriya.echo.di.App
 import dev.brahmkshatriya.echo.download.Downloader
 import dev.brahmkshatriya.echo.extensions.ExtensionUtils.get
@@ -22,8 +23,11 @@ import dev.brahmkshatriya.echo.playback.MediaItemUtils.context
 import dev.brahmkshatriya.echo.playback.MediaItemUtils.extensionId
 import dev.brahmkshatriya.echo.playback.MediaItemUtils.track
 import dev.brahmkshatriya.echo.playback.PlayerState
+import dev.brahmkshatriya.echo.utils.ui.UiUtils.isTv
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -42,6 +46,7 @@ class PlayerRadio(
 
     companion object {
         const val AUTO_START_RADIO = "auto_start_radio"
+        private const val RADIO_PREFETCH_THRESHOLD = 3
         suspend fun start(
             throwableFlow: MutableSharedFlow<Throwable>,
             extension: Extension<*>,
@@ -66,7 +71,17 @@ class PlayerRadio(
             loaded: PlayerState.Radio.Loaded
         ) {
             stateFlow.value = PlayerState.Radio.Loading
-            val tracks = loaded.tracks(loaded.cont) ?: return
+            val tracks = loaded.tracks(loaded.cont) ?: run {
+                // Page load failed: extension.get caught the throwable and getOrThrow already reported it to
+                // throwFlow, returning null. Restore the prior Loaded state instead of leaving stateFlow pinned
+                // at Loading — a stuck Loading makes topUpQueue() and startRadio() no-op for the rest of the
+                // context, stranding the WHOLE radio subsystem (not just this fetch). Restoring Loaded lets the
+                // next track transition retry (correct for a transient failure); a genuinely exhausted radio
+                // takes the continuation==null path below and becomes Empty instead. Generic by construction:
+                // null is the universal failure signal here, so this covers any extension whose loadPage throws.
+                stateFlow.value = loaded
+                return
+            }
 
             stateFlow.value = if (tracks.continuation == null) PlayerState.Radio.Empty
             else loaded.copy(cont = tracks.continuation)
@@ -82,21 +97,68 @@ class PlayerRadio(
 
             withContext(Dispatchers.Main) {
                 player.addMediaItems(item)
-                player.prepare()
+                if (player.playbackState == Player.STATE_IDLE) player.prepare()
             }
         }
     }
+
+    private var radioQueueActive = false
+
+    // TV drives radio continuation/start from the explicit hooks below (tvDriveRadio) instead of
+    // startRadio()/topUpQueue(), which don't reliably fire on TV. Phone is untouched: isTv is false there,
+    // so onTimelineChanged / onMediaItemTransition fall through to the exact same startRadio()/topUpQueue()
+    // calls and onPlaybackStateChanged is a no-op. Detection matches the rest of the app (UiModeManager
+    // UI_MODE_TYPE_TELEVISION || FEATURE_LEANBACK); the mode is fixed at runtime, so lazy eval is safe.
+    private val isTv by lazy { app.context.isTv() }
+
+    // Reset-safe idempotency guard for the TV driver — deliberately NOT the radioFlow==Loading state (which
+    // can strand). compareAndSet is checked BEFORE the try, so every exit inside the try (early returns,
+    // exceptions, coroutine cancellation) unwinds through finally and always releases it.
+    private val tvInFlight = AtomicBoolean(false)
 
     private suspend fun loadPlaylist() {
         val mediaItem = withContext(Dispatchers.Main) { player.currentMediaItem } ?: return
         val extensionId = mediaItem.extensionId
         val item = mediaItem.track
-        val itemContext = mediaItem.context
+        // A LABEL_ONLY_RADIO context is a display-only header stamp (bare-track / Radio-History seed), not
+        // a real radio to generate — strip it so radio() receives null exactly as before, keeping the real
+        // auto-radio identical and extension-agnostic. The MediaItem's context is untouched, so the header
+        // still reads "Playing from <track> Radio".
+        val itemContext = mediaItem.context?.takeUnless {
+            it is Radio && it.extras[MediaItemUtils.LABEL_ONLY_RADIO] == "true"
+        }
+        val prior = stateFlow.value
         stateFlow.value = PlayerState.Radio.Loading
-        val extension = extensionList.getExtension(extensionId) ?: return
+        val extension = extensionList.getExtension(extensionId) ?: run {
+            // Extension gone after Loading was set — restore the prior state rather than strand at Loading.
+            // Same principle as play() restoring its `loaded`: reset to whatever we were before Loading. Here
+            // prior is always Empty (loadPlaylist is only reached from the Empty branches of topUpQueue/
+            // startRadio), so this is Empty today, but capturing it keeps the intent explicit and robust.
+            stateFlow.value = prior
+            return
+        }
         val loaded = start(throwFlow, extension, item, itemContext)
         stateFlow.value = loaded ?: PlayerState.Radio.Empty
-        if (loaded != null) play(player, downloadFlow, app, stateFlow, loaded)
+        if (loaded != null) {
+            radioQueueActive = true
+            play(player, downloadFlow, app, stateFlow, loaded)
+        }
+    }
+
+    private suspend fun topUpQueue() {
+        if (!radioQueueActive) return
+        if (stateFlow.value is PlayerState.Radio.Loading) return
+        val remaining = withContext(Dispatchers.Main) {
+            // Remaining upcoming tracks = full count minus the current index; drives radio prefetch.
+            val fullIndex = player.currentMediaItemIndex
+            player.mediaItemCount - fullIndex - 1
+        }
+        if (remaining > RADIO_PREFETCH_THRESHOLD) return
+        when (val state = stateFlow.value) {
+            is PlayerState.Radio.Loaded -> play(player, downloadFlow, app, stateFlow, state)
+            is PlayerState.Radio.Empty -> loadPlaylist()
+            else -> {}
+        }
     }
 
     private var autoStartRadio = app.settings.getBoolean(AUTO_START_RADIO, true)
@@ -108,6 +170,9 @@ class PlayerRadio(
 
     init {
         app.settings.registerOnSharedPreferenceChangeListener(listener)
+        scope.coroutineContext[Job]?.invokeOnCompletion {
+            app.settings.unregisterOnSharedPreferenceChangeListener(listener)
+        }
     }
 
     private suspend fun startRadio() {
@@ -125,13 +190,68 @@ class PlayerRadio(
         }
     }
 
+    // TV-only radio driver (see isTv). Mirrors what auto-radio should do, driven from the listener callbacks
+    // that DO fire on TV: (1) extend an active radio when running low — like topUpQueue, but gated on the
+    // current item being a Radio rather than radioQueueActive, so explicitly-started radios (context menu,
+    // card/search trackRadio) extend too, and NOT gated on autoStartRadio (matching topUpQueue); (2) start a
+    // radio at the end of ANY queue — album/playlist/track — like startRadio, honoring autoStartRadio.
+    // Reuses the unmodified loadPlaylist(), which derives itemContext from the current track exactly as on
+    // phone, so the generated radio is identical. tvInFlight (not the radioFlow state) serializes overlapping
+    // transition / STATE_ENDED calls so a boundary never double-appends.
+    private suspend fun tvDriveRadio(atEnd: Boolean) {
+        if (!tvInFlight.compareAndSet(false, true)) return
+        try {
+            val info = withContext(Dispatchers.Main) {
+                val current = player.currentMediaItem ?: return@withContext null
+                Triple(
+                    current.context,
+                    player.mediaItemCount - player.currentMediaItemIndex - 1,
+                    player.repeatMode != REPEAT_MODE_OFF
+                )
+            } ?: return
+            val (ctx, remaining, repeating) = info
+            if (repeating) return
+            val runningLow = ctx is Radio && remaining <= RADIO_PREFETCH_THRESHOLD
+            val startAtEnd = (atEnd || remaining <= 0) && autoStartRadio
+            if (!runningLow && !startAtEnd) return
+            loadPlaylist()
+            // If we appended because the queue had fully ENDED (the STATE_ENDED belt fired before a
+            // running-low transition could pre-append), playback is parked at the end — advance into the
+            // freshly appended radio and resume. In the normal case the append happened while the last track
+            // was still playing, so the player isn't ENDED here and this is a no-op.
+            if (atEnd) withContext(Dispatchers.Main) {
+                if (player.playbackState == Player.STATE_ENDED && player.hasNextMediaItem()) {
+                    player.seekToNextMediaItem()
+                    player.play()
+                }
+            }
+        } finally {
+            tvInFlight.set(false)
+        }
+    }
+
     override fun onTimelineChanged(timeline: Timeline, reason: Int) {
+        if (isTv) return // TV: radio is driven by onMediaItemTransition + onPlaybackStateChanged instead
         scope.launch { startRadio() }
     }
 
     override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
-        if (player.mediaItemCount == 0) stateFlow.value = PlayerState.Radio.Empty
+        if (player.mediaItemCount == 0) {
+            stateFlow.value = PlayerState.Radio.Empty
+            radioQueueActive = false
+        }
+        if (isTv) {
+            scope.launch { tvDriveRadio(atEnd = false) }
+            return
+        }
         scope.launch { startRadio() }
+        scope.launch { topUpQueue() }
+    }
+
+    // TV-only end-of-queue hook (phone never overrode this; default Player.Listener impl is empty). When the
+    // queue fully ends without a running-low transition having pre-appended, start/continue the radio.
+    override fun onPlaybackStateChanged(playbackState: Int) {
+        if (isTv && playbackState == Player.STATE_ENDED) scope.launch { tvDriveRadio(atEnd = true) }
     }
 }
 

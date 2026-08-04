@@ -1,3 +1,5 @@
+@file:Suppress("UNREACHABLE_CODE")
+
 package dev.brahmkshatriya.echo.utils
 
 import android.content.Context
@@ -16,7 +18,6 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import okhttp3.OkHttpClient
 import okhttp3.Request
-import okio.use
 import java.io.File
 import java.util.zip.ZipFile
 
@@ -26,7 +27,6 @@ object AppUpdater {
 
     @Suppress("KotlinConstantConditions")
     suspend fun updateApp(app: App): File? {
-        val throwableFlow = app.throwFlow
         val messageFlow = app.messageFlow
         val githubRepo = app.context.getString(R.string.app_github_repo)
         val appType = BuildConfig.BUILD_TYPE
@@ -49,7 +49,6 @@ object AppUpdater {
                 else -> return null
             }
         }.getOrElse {
-            throwableFlow.emit(it)
             return null
         }
 
@@ -64,12 +63,15 @@ object AppUpdater {
             val download = downloadUpdate(app.context, url, client).getOrThrow()
             if (appType == "stable") download else unzipApk(download)
         }.getOrElse {
-            throwableFlow.emit(it)
             return null
         }
     }
 
     private val githubRegex = Regex("https://api\\.github\\.com/repos/([^/]*)/([^/]*)/")
+    // Matches a github.com BROWSER url and captures user/repo from the first two path segments:
+    // https://github.com/<user>/<repo> and any suffix (/, /releases, /releases/latest, /releases/tag/…),
+    // with optional http/www. `[^/]+` stops at the next slash so trailing paths/slashes are ignored.
+    private val githubBrowserRegex = Regex("^https?://(?:www\\.)?github\\.com/([^/]+)/([^/]+)")
     suspend fun getGithubUpdateUrl(
         currentVersion: String,
         updateUrl: String,
@@ -174,11 +176,20 @@ object AppUpdater {
         client: OkHttpClient
     ) = runIOCatching {
         if (updateUrl.isEmpty()) return@runIOCatching null
-        if (updateUrl.startsWith("https://api.github.com/repos/")) {
-            getGithubUpdateUrl(currentVersion, updateUrl, client)
-        } else {
-            throw Exception("Unsupported update url")
+        // Accept the api.github.com/repos/ form directly; normalize a github.com BROWSER url
+        // (github.com/<user>/<repo>[/releases…]) to the api form getGithubUpdateUrl expects.
+        val apiUrl = when {
+            updateUrl.startsWith("https://api.github.com/repos/") -> updateUrl
+            else -> githubBrowserRegex.find(updateUrl)?.destructured?.let { (user, repo) ->
+                "https://api.github.com/repos/$user/${repo.removeSuffix(".git")}/releases"
+            }
         }
+        // Non-empty but not a recognizable GitHub url (GitLab, self-hosted, direct-APK host, …):
+        // return null quietly instead of throwing. getExtensionUpdate/AddViewModel treat null as
+        // "nothing to download" (silent on auto-checks; a benign "no update available" only when
+        // user-triggered), so an unsupported-host extension no longer emits a recurring "error
+        // updating extension" via throwFlow.emit on every silent auto-check.
+        apiUrl?.let { getGithubUpdateUrl(currentVersion, it, client) }
     }
 
     private suspend fun <T> runIOCatching(

@@ -15,45 +15,70 @@ object PlayerCommands {
     val repeatCommand = SessionCommand("repeat", Bundle.EMPTY)
     val repeatOffCommand = SessionCommand("repeat_off", Bundle.EMPTY)
     val repeatOneCommand = SessionCommand("repeat_one", Bundle.EMPTY)
+    val shuffleCommand = SessionCommand("shuffle_on", Bundle.EMPTY)
+    val shuffleOffCommand = SessionCommand("shuffle_off", Bundle.EMPTY)
+    // Pure flag/icon sync (Bundle "enabled": Boolean): sets shuffleModeEnabled on the service player WITHOUT
+    // changeQueue, so a client-side in-order start-playback path can correct a stale shuffle icon without reordering.
+    val syncShuffleFlagCommand = SessionCommand("sync_shuffle_flag", Bundle.EMPTY)
     val playCommand = SessionCommand("play", Bundle.EMPTY)
     val addToQueueCommand = SessionCommand("add_to_queue", Bundle.EMPTY)
     val addToNextCommand = SessionCommand("add_to_next", Bundle.EMPTY)
     val radioCommand = SessionCommand("radio", Bundle.EMPTY)
+    val trackRadioCommand = SessionCommand("track_radio", Bundle.EMPTY)
     val sleepTimer = SessionCommand("sleep_timer", Bundle.EMPTY)
     val resumeCommand = SessionCommand("resume", Bundle.EMPTY)
     val imageCommand = SessionCommand("image", Bundle.EMPTY)
+    val backfillCommand = SessionCommand("backfill", Bundle.EMPTY)
+    val seekToFullCommand = SessionCommand("seek_to_full", Bundle.EMPTY)
 
-    fun getLikeButton(context: Context, item: MediaItem) = run {
-        val builder = CommandButton.Builder()
-        if (!item.isLiked) builder
-            .setDisplayName(context.getString(R.string.like))
-            .setIconResId(R.drawable.ic_favorite_20dp)
-            .setSessionCommand(likeCommand)
-        else builder
-            .setDisplayName(context.getString(R.string.unlike))
-            .setIconResId(R.drawable.ic_favorite_filled_20dp)
-            .setSessionCommand(unlikeCommand)
-        builder.build()
-    }
+    fun getLikeButton(context: Context, item: MediaItem) =
+        if (!item.isLiked)
+            CommandButton.Builder(CommandButton.ICON_HEART_UNFILLED)
+                .setDisplayName(context.getString(R.string.like))
+                .setCustomIconResId(R.drawable.ic_favorite_20dp)
+                .setSessionCommand(likeCommand)
+                .build()
+        else
+            CommandButton.Builder(CommandButton.ICON_HEART_FILLED)
+                .setDisplayName(context.getString(R.string.unlike))
+                .setCustomIconResId(R.drawable.ic_favorite_filled_20dp)
+                .setSessionCommand(unlikeCommand)
+                .build()
 
-    fun getRepeatButton(context: Context, repeat: Int) = run {
-        val builder = CommandButton.Builder()
-        when (repeat) {
-            Player.REPEAT_MODE_ONE -> builder
+    fun getShuffleButton(context: Context, shuffleEnabled: Boolean): CommandButton =
+        if (shuffleEnabled)
+            CommandButton.Builder(CommandButton.ICON_SHUFFLE_ON)
+                .setDisplayName(context.getString(R.string.shuffle))
+                .setCustomIconResId(R.drawable.ic_shuffle_on_40dp)
+                .setSessionCommand(shuffleOffCommand)
+                .build()
+        else
+            CommandButton.Builder(CommandButton.ICON_SHUFFLE_OFF)
+                .setDisplayName(context.getString(R.string.shuffle))
+                .setCustomIconResId(R.drawable.ic_shuffle_40dp)
+                .setSessionCommand(shuffleCommand)
+                .build()
+
+    fun getRepeatButton(context: Context, repeat: Int) = when (repeat) {
+        Player.REPEAT_MODE_ONE ->
+            CommandButton.Builder(CommandButton.ICON_REPEAT_ONE)
                 .setDisplayName(context.getString(R.string.repeat_one))
-                .setIconResId(R.drawable.ic_repeat_one_20dp)
+                .setCustomIconResId(R.drawable.ic_repeat_one_20dp)
                 .setSessionCommand(repeatOffCommand)
+                .build()
 
-            Player.REPEAT_MODE_OFF -> builder
+        Player.REPEAT_MODE_OFF ->
+            CommandButton.Builder(CommandButton.ICON_REPEAT_OFF)
                 .setDisplayName(context.getString(R.string.repeat_off))
-                .setIconResId(R.drawable.ic_repeat_20dp)
+                .setCustomIconResId(R.drawable.ic_repeat_20dp)
                 .setSessionCommand(repeatCommand)
+                .build()
 
-            else -> builder
+        else ->
+            CommandButton.Builder(CommandButton.ICON_REPEAT_ALL)
                 .setDisplayName(context.getString(R.string.repeat_all))
-                .setIconResId(R.drawable.ic_repeat_on_20dp)
+                .setCustomIconResId(R.drawable.ic_repeat_on_20dp)
                 .setSessionCommand(repeatOneCommand)
-        }
-        builder.build()
+                .build()
     }
 }

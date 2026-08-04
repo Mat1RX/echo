@@ -9,13 +9,24 @@ import android.media.audiofx.Equalizer
 import android.media.audiofx.LoudnessEnhancer
 import androidx.annotation.OptIn
 import androidx.core.content.edit
+import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackParameters
 import androidx.media3.common.Player
+import androidx.media3.common.Timeline
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.PlayerMessage
+import dev.brahmkshatriya.echo.common.models.Album
 import dev.brahmkshatriya.echo.extensions.ExtensionUtils.copyTo
+import dev.brahmkshatriya.echo.playback.MediaItemUtils.context
+import dev.brahmkshatriya.echo.playback.MediaItemUtils.track
+import dev.brahmkshatriya.echo.playback.renderer.AudioEffectsProcessor
+import dev.brahmkshatriya.echo.utils.ContextUtils.getSettings
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.launch
 import kotlin.math.pow
 import kotlin.math.roundToInt
 
@@ -23,8 +34,18 @@ import kotlin.math.roundToInt
 class EffectsListener(
     private val exoPlayer: ExoPlayer,
     private val context: Context,
-    private val audioSessionFlow: MutableStateFlow<Int>
+    private val audioSessionFlow: MutableStateFlow<Int>,
+    private val audioEffectsProcessor: AudioEffectsProcessor,
+    // Service-lifetime scope (PlayerService.scope: SupervisorJob + IO, cancelled in onDestroy) — valid at
+    // init/onCreate and never fires after release, so the deferred broadcast can't leak or run post-teardown.
+    private val scope: CoroutineScope,
 ) : Player.Listener {
+
+    // Serial (parallelism=1) view of IO: the two ACTION_OPEN_AUDIO_EFFECT_CONTROL_SESSION announces — the init
+    // one and the onAudioSessionIdChanged one — dispatch here in FIFO submission order, so the init announce can
+    // never land AFTER a later session-change announce and strand an external equalizer on a stale session.
+    // Declared before init so it's initialized before the init block's broadcast uses it.
+    private val broadcastDispatcher = Dispatchers.IO.limitedParallelism(1)
 
     init {
         audioSessionFlow.value = exoPlayer.audioSessionId
@@ -40,7 +61,7 @@ class EffectsListener(
         oldSettings = current
         current.registerOnSharedPreferenceChangeListener(listener)
         applyPlayback(current)
-        effects.applySettings(current)
+        effects.applySettings(current, audioEffectsProcessor.isProcessingEnabled)
     }
 
     private fun createEffects() = Effects(exoPlayer.audioSessionId)
@@ -56,13 +77,46 @@ class EffectsListener(
     private var effects: Effects = createEffects()
     private val listener = OnSharedPreferenceChangeListener { _, _ -> applyCustomEffects() }
 
-    override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) = applyCustomEffects()
+    override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+        applyCustomEffects()
+        applyGain(mediaItem)
+    }
+
+    private fun applyGain(mediaItem: MediaItem?) {
+        val gainDb = runCatching {
+            mediaItem?.track?.extras?.get("GAIN")?.toFloatOrNull()
+        }.getOrNull()
+        audioEffectsProcessor.setTrackGain(gainDb, mediaItem?.mediaId)
+    }
+
+    override fun onTimelineChanged(timeline: Timeline, reason: Int) {
+    }
+
+    override fun onPositionDiscontinuity(
+        oldPosition: Player.PositionInfo,
+        newPosition: Player.PositionInfo,
+        reason: Int,
+    ) {
+    }
+
+    override fun onPlaybackStateChanged(playbackState: Int) {
+    }
+
+    fun updateNormalizationSettings() {
+        if (!audioEffectsProcessor.normalizationEnabled || !audioEffectsProcessor.isProcessingEnabled) {
+            audioEffectsProcessor.resetGain()
+        } else {
+            applyGain(exoPlayer.currentMediaItem)
+        }
+        applyCustomEffects()
+    }
+
     override fun onAudioSessionIdChanged(audioSessionId: Int) {
         release()
         context.broadcastAudioSession()
         audioSessionFlow.value = audioSessionId
         effects = createEffects()
-        effects.applySettings(oldSettings)
+        effects.applySettings(oldSettings, audioEffectsProcessor.isProcessingEnabled)
     }
 
     class Effects(sessionId: Int) {
@@ -96,8 +150,8 @@ class EffectsListener(
             }
         }
 
-        fun applySettings(settings: SharedPreferences) {
-            applyBassBoost(settings.getInt(BASS_BOOST, 0))
+        fun applySettings(settings: SharedPreferences, isEnabled: Boolean = true) {
+            applyBassBoost(if (isEnabled) settings.getInt(BASS_BOOST, 0) else 0)
         }
     }
 
@@ -134,12 +188,21 @@ class EffectsListener(
     }
 
     private fun Context.broadcastAudioSession() {
+        // Capture the session id SYNCHRONOUSLY (cheap getter, no binder) so the deferred announce uses the
+        // session that was live at call time. Only the sendBroadcast — a blocking binder round-trip to
+        // ActivityManagerService that ANR'd service onCreate on slow devices — moves off the main thread,
+        // serialized via broadcastDispatcher to keep announce order. The audioSessionFlow write and effects
+        // setup at the call sites stay synchronous; nothing in our code observes this broadcast (it's the
+        // external-equalizer announce — no app-side receiver), so deferring it changes no internal state.
+        val ctx = this
         val id = exoPlayer.audioSessionId
-        sendBroadcast(Intent(AudioEffect.ACTION_OPEN_AUDIO_EFFECT_CONTROL_SESSION).apply {
-            putExtra(AudioEffect.EXTRA_PACKAGE_NAME, packageName)
-            putExtra(AudioEffect.EXTRA_AUDIO_SESSION, id)
-            putExtra(AudioEffect.EXTRA_CONTENT_TYPE, AudioEffect.CONTENT_TYPE_MUSIC)
-        })
+        scope.launch(broadcastDispatcher) {
+            ctx.sendBroadcast(Intent(AudioEffect.ACTION_OPEN_AUDIO_EFFECT_CONTROL_SESSION).apply {
+                putExtra(AudioEffect.EXTRA_PACKAGE_NAME, ctx.packageName)
+                putExtra(AudioEffect.EXTRA_AUDIO_SESSION, id)
+                putExtra(AudioEffect.EXTRA_CONTENT_TYPE, AudioEffect.CONTENT_TYPE_MUSIC)
+            })
+        }
     }
 
     private fun Context.broadcastAudioSessionClose(id: Int) {
@@ -149,7 +212,28 @@ class EffectsListener(
         })
     }
 
+    // Runtime session-change CLOSE — deferred off-main on the SAME serial broadcastDispatcher as OPEN, so
+    // it can't block the ExoPlayer callback (main) thread on the AMS Binder round-trip (the ANR), and FIFO
+    // keeps CLOSE(old) — submitted from release() BEFORE broadcastAudioSession()'s OPEN(new) in
+    // onAudioSessionIdChanged — ordered ahead of that OPEN. `id` is passed by the caller (captured
+    // synchronously) so the coroutine closes the OLD session, not whatever is live when it runs.
+    private fun Context.broadcastAudioSessionCloseDeferred(id: Int) {
+        val ctx = this
+        scope.launch(broadcastDispatcher) { ctx.broadcastAudioSessionClose(id) }
+    }
+
     private fun release() {
+        effects.release()
+        // Defer the CLOSE off-main — this runs from onAudioSessionIdChanged on the callback/main thread.
+        // audioSessionFlow.value is still the OLD session here (updated AFTER this call), so we close it.
+        context.broadcastAudioSessionCloseDeferred(audioSessionFlow.value)
+    }
+
+    // Teardown CLOSE — SYNCHRONOUS by design. Called from PlayerService.onDestroy BEFORE scope.cancel();
+    // a deferred close would be dropped when the scope is cancelled → the final CLOSE never fires → the
+    // external equalizer keeps a stale, leaked effect-session. The cold-start ANR that motivated deferring
+    // the runtime OPEN/CLOSE does not apply at teardown (onDestroy, not a contended cold-start onCreate).
+    fun releaseBlocking() {
         effects.release()
         context.broadcastAudioSessionClose(audioSessionFlow.value)
     }

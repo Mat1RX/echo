@@ -1,4 +1,4 @@
-name: nightly
+name: Nightly Build
 
 on:
   push:
@@ -8,6 +8,7 @@ on:
 
 jobs:
   build:
+    name: Build Nightly Release
     runs-on: ubuntu-latest
     env:
       VERSION: $( echo ${{ github.event.head_commit.id }} | cut -c1-7 )
@@ -18,48 +19,57 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Set up 6GB Swap Space (OOM Prevention)
+        uses: pierotofy/set-swap-space@v1.0
+        with:
+          swap-size-gb: 6
+
       - name: Setup JDK 17
         uses: actions/setup-java@v4
         with:
-          distribution: 'zulu'
-          java-version: 17
-          cache: 'gradle'
+          distribution: 'temurin'
+          java-version: '17'
 
-      - name: Cook KeyStore
-        run: echo "${{ secrets.KEYSTORE_B64 }}" | base64 -d > $GITHUB_WORKSPACE/signing-key.jks
-
-      - name: Cook Google Services
-        run: echo "${{ secrets.GOOGLE_SERVICES_B64 }}" | base64 -d > app/google-services.json
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
 
       - name: Make gradlew executable
         run: chmod +x ./gradlew
 
       - name: Build with Gradle
+        env:
+          GRADLE_OPTS: "-Dorg.gradle.jvmargs=\"-Xmx3072m -XX:MaxMetaspaceSize=512m -XX:+UseG1GC -XX:+ParallelRefProcEnabled\" -Dorg.gradle.workers.max=2 -Dorg.gradle.parallel=false"
         run: |
-          ./gradlew assembleNightly \
-          -Pandroid.injected.signing.store.file=$GITHUB_WORKSPACE/signing-key.jks \
-          -Pandroid.injected.signing.store.password=${{ secrets.PASSWORD }} \
-          -Pandroid.injected.signing.key.alias=key0 \
-          -Pandroid.injected.signing.key.password=${{ secrets.PASSWORD }}
-          cp app/build/outputs/apk/nightly/app-nightly.apk app/build/${{ env.VERSION }}.apk
+          ./gradlew assembleNightly --no-daemon
 
-      - name: Upload APK
+      - name: Sign Nightly APK (Fallback if unsigned)
+        run: |
+          BUILD_TOOLS=$(find $ANDROID_HOME/build-tools/ -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n 1)
+          if [ -f "app/build/outputs/apk/nightly/app-nightly-unsigned.apk" ] && [ ! -f "app/build/outputs/apk/nightly/app-nightly.apk" ]; then
+            keytool -genkey -v -keystore debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
+            $BUILD_TOOLS/apksigner sign --ks debug.keystore --ks-pass pass:android --key-pass pass:android --out app/build/outputs/apk/nightly/app-nightly.apk app/build/outputs/apk/nightly/app-nightly-unsigned.apk
+          fi
+
+      - name: Upload Nightly APK Artifact
         uses: actions/upload-artifact@v4
         with:
+          name: app-nightly
           path: app/build/outputs/apk/nightly/app-nightly.apk
 
       - name: Upload APK to Discord
         shell: bash
+        if: env.WEBHOOK != ''
         env:
           WEBHOOK: ${{ secrets.DISCORD_NIGHTLY_WEBHOOK }}
         run: |
           message=$(echo "@everyone **${{ env.VERSION }}**\n${{ env.COMMIT }}")
           curl -F "payload_json={\"content\":\"${message}\"}" \
-          -F "echo_beta=@app/build/${{ env.VERSION }}.apk" \
+          -F "echo_beta=@app/build/outputs/apk/nightly/app-nightly.apk" \
           ${{ env.WEBHOOK }}
 
       - name: Upload APK to Telegram
         shell: bash
+        if: env.BOT_ID != ''
         env:
           BOT_ID: ${{ secrets.TELEGRAM_BOT_ID }}
           CHANNEL_ID: ${{ secrets.TELEGRAM_CHANNEL_ID }}
@@ -69,7 +79,7 @@ jobs:
           message=$(printf "*Nightly Release*\n${{ env.COMMIT }}" | sed -E "$regex")
           curl -F "chat_id=${{ env.CHANNEL_ID }}" \
           -F "message_thread_id=${{ env.THREAD_ID }}" \
-          -F "document=@app/build/${{ env.VERSION }}.apk" \
+          -F "document=@app/build/outputs/apk/nightly/app-nightly.apk" \
           -F "caption=${message}" \
           -F "parse_mode=MarkdownV2" \
           https://api.telegram.org/bot${{ env.BOT_ID }}/sendDocument

@@ -26,6 +26,7 @@
     <style name="EchoBottomSheetStyle" parent="Widget.Material3.BottomSheet">
         <item name="backgroundTint">?navBackground</item>
         <item name="behavior_peekHeight">512dp</item>
+        <item name="behavior_skipCollapsed">true</item>
     </style>
 
     <style name="TopCollapsingBar" parent="Widget.Material3.CollapsingToolbar.Large">
@@ -37,7 +38,13 @@
         <item name="layout_scrollFlags">scroll|exitUntilCollapsed|snap</item>
     </style>
 
-    <style name="EchoCollapsingBar" parent="TopCollapsingBar" />
+    <style name="EchoCollapsingBar" parent="TopCollapsingBar">
+        <item name="titleCollapseMode">fade</item>
+    </style>
+
+    <style name="MediaHeaderTitle" parent="TextAppearance.Material3.HeadlineSmall">
+        <item name="android:textStyle">bold</item>
+    </style>
 
     <style name="EchoCardView">
         <item name="cardCornerRadius">?itemCorner</item>
@@ -58,7 +65,7 @@
         <item name="android:background">@android:color/transparent</item>
         <item name="layout_collapseMode">pin</item>
         <item name="navigationContentDescription">@string/back</item>
-        <item name="navigationIcon">@drawable/ic_back</item>
+        <item name="navigationIcon">@drawable/ic_back_toolbar</item>
     </style>
 
     <style name="EchoSnackBar" parent="Widget.Material3.Snackbar">
@@ -72,7 +79,6 @@
     </style>
 
     <style name="NavView" parent="Widget.Material3.BottomNavigationView">
-        <item name="backgroundTint">?attr/navBackground</item>
         <item name="itemActiveIndicatorStyle">@style/BottomNavbarActiveIndicator</item>
         <item name="itemTextAppearanceActiveBoldEnabled">false</item>
         <item name="itemTextAppearanceActive">@style/TextAppearance.Material3.BodySmall</item>
@@ -85,6 +91,18 @@
         <item name="itemMinHeight">@dimen/nav_height</item>
         <item name="android:paddingTop">0dp</item>
         <item name="android:paddingBottom">0dp</item>
+    </style>
+
+    <!-- TV-only NavView: adds a focus-aware item overlay so D-pad focus on a rail item is clearly visible
+         (distinct from the selected active-indicator). Applied ONLY in layout-land-television/activity_main.xml;
+         phone/tablet keep @style/NavView unchanged. -->
+    <style name="NavViewTv" parent="@style/NavView">
+        <item name="itemRippleColor">@color/tv_nav_item_ripple</item>
+        <!-- 10-foot rail: bigger icons + labels (default 24dp icon / BodySmall label). Only ever applied in
+             layout-land-television/activity_main.xml, so phone's @style/NavView is untouched. -->
+        <item name="itemIconSize">36dp</item>
+        <item name="itemTextAppearanceActive">@style/TextAppearance.Material3.BodyLarge</item>
+        <item name="itemTextAppearanceInactive">@style/TextAppearance.Material3.BodyLarge</item>
     </style>
 
     <style name="AppBarOutline">
@@ -164,6 +182,23 @@
         <item name="cornerSizeTopLeft">8dp</item>
         <item name="cornerSizeBottomRight">8dp</item>
         <item name="cornerSizeBottomLeft">8dp</item>
+    </style>
+
+    <!-- TV full-screen player cover: slight, intentional rounding for 10-foot art. Referenced only by
+         fragment_player_tv (TV-only). Must be applied to an INSET cover — rounding edge-flush art just
+         gets clipped by the screen edge and looks broken (see cover margins in that layout). -->
+    <style name="TvCoverShape" parent="ShapeAppearance.Material3.Corner.None">
+        <item name="cornerFamily">rounded</item>
+        <item name="cornerSize">24dp</item>
+    </style>
+
+    <!-- TV mini-player thumbnail: same slight-rounding intent as TvCoverShape, scaled to the 56dp
+         thumbnail so the artwork keeps its shape across collapse/expand. 16dp would read as a squircle
+         at this size; 8dp matches the app's small-art rounding. Referenced only by
+         fragment_player_mini_tv (TV-only). -->
+    <style name="TvMiniCoverShape" parent="ShapeAppearance.Material3.Corner.None">
+        <item name="cornerFamily">rounded</item>
+        <item name="cornerSize">8dp</item>
     </style>
 
     <style name="PlayerMoreBottomShape" parent="ShapeAppearance.Material3.Corner.None">
@@ -327,14 +362,6 @@
         <item name="backgroundTint">@android:color/transparent</item>
     </style>
 
-    <style name="IconButtonOutlinedBig" parent="IconButtonOutlined">
-        <item name="android:paddingStart">4dp</item>
-        <item name="android:paddingEnd">4dp</item>
-        <item name="android:paddingTop">4dp</item>
-        <item name="android:paddingBottom">4dp</item>
-        <item name="iconSize">32dp</item>
-    </style>
-
     <style name="ButtonOutlinedOverlay" parent="ThemeOverlay.Material3Expressive.Button.Outlined">
         <item name="colorContainerUnchecked">?navBackground</item>
         <item name="colorContainer">?navBackground</item>
@@ -395,9 +422,15 @@
         <item name="cardBackgroundColor">?attr/colorSurfaceContainerHigh</item>
         <item name="layout_constraintDimensionRatio">1,1</item>
         <item name="layout_constraintEnd_toEndOf">parent</item>
-        <item name="layout_constraintHeight_max">@dimen/max_cover_size</item>
+        <item name="layout_constraintHeight_max">@dimen/media_header_cover_size</item>
         <item name="layout_constraintStart_toStartOf">parent</item>
         <item name="layout_constraintTop_toTopOf">parent</item>
-        <item name="layout_constraintWidth_max">@dimen/max_cover_size</item>
+        <item name="layout_constraintWidth_max">@dimen/media_header_cover_size</item>
     </style>
+
+    <style name="ShapeAppearance.Collapsed.Cover" parent="">
+        <item name="cornerFamily">rounded</item>
+        <item name="cornerSize">?itemCorner</item>
+    </style>
+
 </resources>

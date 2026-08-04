@@ -20,6 +20,9 @@ import dev.brahmkshatriya.echo.R
 import dev.brahmkshatriya.echo.common.models.Streamable
 import dev.brahmkshatriya.echo.databinding.DialogPlayerQualitySelectionBinding
 import dev.brahmkshatriya.echo.playback.MediaItemUtils.backgroundIndex
+import dev.brahmkshatriya.echo.playback.MediaItemUtils.extensionId
+import dev.brahmkshatriya.echo.playback.MediaItemUtils.isFullyCached
+import dev.brahmkshatriya.echo.playback.MediaItemUtils.metadataKey
 import dev.brahmkshatriya.echo.playback.MediaItemUtils.serverIndex
 import dev.brahmkshatriya.echo.playback.MediaItemUtils.serverWithDownloads
 import dev.brahmkshatriya.echo.playback.MediaItemUtils.subtitleIndex
@@ -91,11 +94,19 @@ class QualitySelectionBottomSheet : BottomSheetDialogFragment() {
 
         observe(viewModel.serverAndTracks) { (tracks, server, index) ->
             val list = if (server != null && !server.merged) server.sources else listOf()
+            val extId = viewModel.playerState.current.value?.mediaItem?.extensionId
+            val trackId = viewModel.playerState.current.value?.mediaItem?.track?.id
             binding.run {
                 applyChips(
                     list, streamableSource, streamableSourceGroup, index,
                     { viewModel.changeCurrentSource(list.indexOf(it)) }) {
-                    it.title ?: getString(R.string.quality_x, it.quality)
+                    val base = it.title ?: getString(R.string.quality_x, it.quality)
+                    val idx = list.indexOf(it)
+                    val isCached = if (trackId != null && extId != null) {
+                        val serverIdx = viewModel.playerState.current.value?.mediaItem?.serverIndex ?: 0
+                        viewModel.cache.isFullyCached(metadataKey(trackId, serverIdx, idx, extId))
+                    } else false
+                    if (isCached) "$base (${getString(R.string.cached)})" else base
                 }
             }
             val details = tracks?.getDetails(requireContext(), server, index)?.joinToString("\n")
@@ -148,12 +159,20 @@ class QualitySelectionBottomSheet : BottomSheetDialogFragment() {
         onClick: Chip.(Streamable?) -> Unit,
     ) {
         val context = chipGroup.context
+        val currentItem = viewModel.playerState.current.value?.mediaItem
         applyChips(streamables, textView, chipGroup, selected, onClick) {
             it?.let {
-                it.title ?: when (it.type) {
+                val base = it.title ?: when (it.type) {
                     Streamable.MediaType.Subtitle -> context.getString(R.string.unknown)
                     else -> context.getString(R.string.quality_x, it.quality)
                 }
+                val index = streamables.indexOf(it)
+                val isCached = currentItem?.let { item ->
+                    if (it.type == Streamable.MediaType.Server) {
+                        viewModel.cache.isFullyCached(metadataKey(item.track.id, index, 0, item.extensionId))
+                    } else false
+                } ?: false
+                if (isCached) "$base (${context.getString(R.string.cached)})" else base
             } ?: context.getString(R.string.off)
         }
     }

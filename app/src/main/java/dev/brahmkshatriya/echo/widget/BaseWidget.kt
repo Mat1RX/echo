@@ -9,7 +9,6 @@ import android.content.Intent
 import android.graphics.Bitmap
 import android.os.Bundle
 import android.widget.RemoteViews
-import androidx.core.os.bundleOf
 import androidx.media3.common.Player
 import androidx.media3.session.MediaController
 import dev.brahmkshatriya.echo.R
@@ -23,8 +22,6 @@ import dev.brahmkshatriya.echo.playback.PlayerCommands.repeatOneCommand
 import dev.brahmkshatriya.echo.playback.PlayerCommands.resumeCommand
 import dev.brahmkshatriya.echo.playback.PlayerCommands.unlikeCommand
 import dev.brahmkshatriya.echo.playback.PlayerService.Companion.getPendingIntent
-import dev.brahmkshatriya.echo.playback.ResumptionUtils.recoverIndex
-import dev.brahmkshatriya.echo.playback.ResumptionUtils.recoverTracks
 import org.koin.core.component.KoinComponent
 import org.koin.core.component.inject
 
@@ -52,9 +49,16 @@ abstract class BaseWidget : AppWidgetProvider(), KoinComponent {
     }
 
     override fun onReceive(context: Context?, intent: Intent?) {
-        ControllerHelper.register(app, key) {
+        // A widget button broadcast can spin the process up just for this receiver. Make the off-main
+        // last-played decode's lifetime EXPLICIT: hold the receiver alive via goAsync() until the decode Job
+        // finishes (or release immediately if none was launched), instead of relying on the getController
+        // service-bind to incidentally keep the process alive. A disk read is well within goAsync()'s window.
+        val pending = goAsync()
+        val decodeJob = ControllerHelper.register(app, key) {
             updateWidgets(app.context)
         }
+        if (decodeJob == null) pending.finish()
+        else decodeJob.invokeOnCompletion { pending.finish() }
         val controller = ControllerHelper.controller ?: return
         println("Controller is $controller")
         when (intent?.action) {
@@ -71,7 +75,7 @@ abstract class BaseWidget : AppWidgetProvider(), KoinComponent {
             ACTION_REPEAT_OFF -> controller.sendCustomCommand(repeatOffCommand, Bundle.EMPTY)
             ACTION_REPEAT_ONE -> controller.sendCustomCommand(repeatOneCommand, Bundle.EMPTY)
             ACTION_RESUME -> controller.run {
-                sendCustomCommand(resumeCommand, bundleOf("cleared" to false))
+                sendCustomCommand(resumeCommand, Bundle.EMPTY)
                 playWhenReady = true
             }
 
@@ -139,11 +143,11 @@ abstract class BaseWidget : AppWidgetProvider(), KoinComponent {
             views: RemoteViews,
         ) {
             val current = controller?.currentMediaItem
-            val item = current?.state ?: context.run {
-                val list = recoverTracks().orEmpty()
-                val index = recoverIndex() ?: 0
-                list.getOrNull(index)?.first
-            }
+            // Live controller item first; else the last-played fallback that ControllerHelper decoded OFF the
+            // main thread. Never decodes the saved queue here — that synchronous parse ANR'd on large queues.
+            // Before the off-main decode lands, this is null and the view degrades to the placeholder below
+            // (title "so_empty", art_music cover) — a brief placeholder, never a blank flash.
+            val item = current?.state ?: ControllerHelper.lastKnownItem
             val title = item?.item?.title
             val artist = item?.item?.artists?.takeIf { it.isNotEmpty() }
                 ?.joinToString(", ") { it.name }
@@ -152,7 +156,17 @@ abstract class BaseWidget : AppWidgetProvider(), KoinComponent {
                 R.id.trackArtist,
                 artist ?: context.getString(R.string.unknown).takeIf { title != null }
             )
-            val image = image?.run { copy(config ?: Bitmap.Config.ARGB_8888, false) }
+            val image = image?.run {
+                val maxPx = 256
+                if (width <= maxPx && height <= maxPx) {
+                    copy(config ?: Bitmap.Config.ARGB_8888, false)
+                } else {
+                    val scale = maxPx.toFloat() / maxOf(width, height)
+                    Bitmap.createScaledBitmap(
+                        this, (width * scale).toInt(), (height * scale).toInt(), true
+                    )
+                }
+            }
             if (image == null) views.setImageViewResource(R.id.trackCover, R.drawable.art_music)
             else views.setImageViewBitmap(R.id.trackCover, image)
 

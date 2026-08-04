@@ -58,6 +58,16 @@ class QueueFragment : Fragment() {
             ): Boolean {
                 val fromPos = viewHolder.bindingAdapterPosition
                 val toPos = target.bindingAdapterPosition
+                if (fromPos == RecyclerView.NO_POSITION || toPos == RecyclerView.NO_POSITION)
+                    return false
+                // Seam 2/G2: keep current at index 0 — an upcoming track can't be dropped at/above the
+                // current row, so nothing gets stranded above current. Current index read from the
+                // viewModel (same source as submit()), NOT queueAdapter — referencing the adapter here
+                // creates a by-lazy ↔ by-lazy type-inference cycle with its touchHelper-using listener.
+                val currentPos = viewModel.playerState.current.value?.let { c ->
+                    viewModel.queue.indexOfFirst { it.mediaId == c.mediaItem.mediaId }
+                } ?: -1
+                if (currentPos != -1 && toPos <= currentPos) return false
                 viewModel.moveQueueItems(fromPos, toPos)
                 return true
             }
@@ -71,10 +81,15 @@ class QueueFragment : Fragment() {
                 recyclerView: RecyclerView,
                 viewHolder: RecyclerView.ViewHolder
             ): Int {
-                return makeMovementFlags(
-                    ItemTouchHelper.UP or ItemTouchHelper.DOWN,
-                    ItemTouchHelper.START
-                )
+                // Seam 2/G2: the current track is pinned — no drag. Current index read from the
+                // viewModel (same source as submit()), NOT queueAdapter, to avoid the by-lazy cycle.
+                val pos = viewHolder.bindingAdapterPosition
+                val currentPos = viewModel.playerState.current.value?.let { c ->
+                    viewModel.queue.indexOfFirst { it.mediaId == c.mediaItem.mediaId }
+                } ?: -1
+                val isCurrent = pos != RecyclerView.NO_POSITION && pos == currentPos
+                val dragFlags = if (isCurrent) 0 else ItemTouchHelper.UP or ItemTouchHelper.DOWN
+                return makeMovementFlags(dragFlags, ItemTouchHelper.START)
             }
         })
     }
@@ -89,21 +104,25 @@ class QueueFragment : Fragment() {
 
         fun submit() {
             val current = viewModel.playerState.current.value
-            val currentIndex = current?.index
+            val fullCurrentIndex = current?.let { c ->
+                viewModel.queue.indexOfFirst { it.mediaId == c.mediaItem.mediaId }
+            } ?: -1
             val it = viewModel.queue.mapIndexed { index, mediaItem ->
-                if (currentIndex == index) current.isPlaying to current.mediaItem
+                if (fullCurrentIndex == index) current!!.isPlaying to current.mediaItem
                 else null to mediaItem
             }
             queueAdapter.submitList(it) {
-                currentIndex ?: return@submitList
-                binding?.root?.scrollToPosition(currentIndex)
+                if (fullCurrentIndex < 0) return@submitList
+                binding?.root?.scrollToPosition(fullCurrentIndex)
             }
         }
 
         observe(viewModel.playerState.current) { submit() }
         observe(viewModel.queueFlow) { submit() }
 
-        val index = viewModel.playerState.current.value?.index ?: return
+        val currentForScroll = viewModel.playerState.current.value ?: return
+        val index = viewModel.queue.indexOfFirst { it.mediaId == currentForScroll.mediaItem.mediaId }
+        if (index < 0) return
         manager.scrollToPositionWithOffset(index + 1, screenHeight)
     }
 }

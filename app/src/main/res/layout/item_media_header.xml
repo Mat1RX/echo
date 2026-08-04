@@ -5,14 +5,14 @@
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
     android:orientation="vertical"
-    android:paddingTop="8dp">
+    android:paddingTop="0dp">
 
     <HorizontalScrollView
         android:id="@+id/buttonGroup"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:layout_gravity="end"
-        android:layout_marginBottom="-56dp"
+        android:layout_marginBottom="-32dp"
         android:scrollbars="none">
 
         <LinearLayout
@@ -117,7 +117,6 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_marginEnd="48dp"
-        android:minHeight="48dp"
         android:paddingHorizontal="4dp"
         android:paddingBottom="8dp"
         android:textColor="?colorOnSurfaceVariant"

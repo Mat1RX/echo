@@ -2,15 +2,15 @@ package dev.brahmkshatriya.echo.extensions.builtin.unified
 
 import android.content.Context
 import androidx.core.net.toUri
-import androidx.room.Dao
-import androidx.room.Database
-import androidx.room.Delete
-import androidx.room.Entity
-import androidx.room.Insert
-import androidx.room.OnConflictStrategy.Companion.REPLACE
-import androidx.room.PrimaryKey
-import androidx.room.Query
-import androidx.room.RoomDatabase
+import androidx.room3.Dao
+import androidx.room3.Database
+import androidx.room3.Delete
+import androidx.room3.Entity
+import androidx.room3.Insert
+import androidx.room3.OnConflictStrategy.Companion.REPLACE
+import androidx.room3.PrimaryKey
+import androidx.room3.Query
+import androidx.room3.RoomDatabase
 import dev.brahmkshatriya.echo.R
 import dev.brahmkshatriya.echo.common.models.Date
 import dev.brahmkshatriya.echo.common.models.EchoMediaItem
@@ -128,7 +128,7 @@ abstract class UnifiedDatabase : RoomDatabase() {
     }
 
     suspend fun loadPlaylist(playlist: Playlist): Playlist {
-        val entity = dao.getPlaylist(playlist.toEntity().id)
+        val entity = dao.getPlaylist(playlist.toEntity().id) ?: return playlist
         val tracks = dao.getTracks(entity.id).map { it.track }
         if (tracks.isEmpty()) return playlist.copy(trackCount = 0, duration = null)
         val durations = tracks.mapNotNull { it.duration }
@@ -140,7 +140,7 @@ abstract class UnifiedDatabase : RoomDatabase() {
     }
 
     suspend fun getTracks(playlist: Playlist): List<Track> {
-        val entity = dao.getPlaylist(playlist.toEntity().id)
+        val entity = dao.getPlaylist(playlist.toEntity().id) ?: return emptyList()
         val tracks = dao.getTracks(entity.id).associateBy { it.eid }
         if (tracks.isEmpty()) return emptyList()
         return entity.list.map { tracks[it]!!.track }
@@ -150,7 +150,7 @@ abstract class UnifiedDatabase : RoomDatabase() {
         playlist: Playlist, index: Int, new: List<Track>,
     ) {
         if (new.isEmpty()) return
-        val entity = dao.getPlaylist(playlist.toEntity().id)
+        val entity = dao.getPlaylist(playlist.toEntity().id) ?: return
         val newTracks = new.map {
             val trackEntity = PlaylistTrackEntity(
                 0, entity.id, it.id, it.extras.extensionId, it.toJson()
@@ -170,7 +170,7 @@ abstract class UnifiedDatabase : RoomDatabase() {
     ) {
         val entities = indexes.map { tracks[it].toTrackEntity() }
         entities.forEach { dao.deletePlaylistTrack(it) }
-        val entity = dao.getPlaylist(playlist.toEntity().id)
+        val entity = dao.getPlaylist(playlist.toEntity().id) ?: return
         val newEntity = entity.copy(
             listData = entity.list.toMutableList().apply {
                 entities.forEach {
@@ -183,7 +183,7 @@ abstract class UnifiedDatabase : RoomDatabase() {
     }
 
     suspend fun moveTrack(playlist: Playlist, fromIndex: Int, toIndex: Int) {
-        val entity = dao.getPlaylist(playlist.toEntity().id)
+        val entity = dao.getPlaylist(playlist.toEntity().id) ?: return
         val newEntity = entity.copy(
             listData = entity.list.toMutableList().apply {
                 add(toIndex, removeAt(fromIndex))
@@ -217,7 +217,7 @@ abstract class UnifiedDatabase : RoomDatabase() {
         suspend fun getPlaylists(): List<PlaylistEntity>
 
         @Query("SELECT * FROM PlaylistEntity WHERE id = :id")
-        suspend fun getPlaylist(id: Long): PlaylistEntity
+        suspend fun getPlaylist(id: Long): PlaylistEntity?
 
         @Query("SELECT * FROM PlaylistEntity WHERE name = :name")
         suspend fun getPlaylist(name: String): PlaylistEntity?

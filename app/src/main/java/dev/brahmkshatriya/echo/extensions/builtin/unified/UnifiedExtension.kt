@@ -4,7 +4,7 @@ import android.content.Context
 import androidx.annotation.OptIn
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.cache.SimpleCache
-import androidx.room.Room
+import androidx.room3.Room
 import dev.brahmkshatriya.echo.BuildConfig
 import dev.brahmkshatriya.echo.R
 import dev.brahmkshatriya.echo.common.Extension
@@ -54,8 +54,8 @@ import dev.brahmkshatriya.echo.common.settings.Settings
 import dev.brahmkshatriya.echo.di.App
 import dev.brahmkshatriya.echo.extensions.cache.Cached
 import dev.brahmkshatriya.echo.extensions.exceptions.AppException.Companion.toAppException
+import dev.brahmkshatriya.echo.playback.MediaItemUtils.isFullyCached
 import dev.brahmkshatriya.echo.playback.MediaItemUtils.toKey
-import dev.brahmkshatriya.echo.utils.CacheUtils.getFromCache
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
 import java.io.File
@@ -367,10 +367,10 @@ class UnifiedExtension(
     ).fallbackToDestructiveMigration(true).build()
 
     private suspend fun getCached() = cache.keys.mapNotNull {
-        val key = context.getFromCache<String>(it, "player")
-        key?.toKey()?.getOrNull()
+        val key = it.toKey().getOrNull() ?: return@mapNotNull null
+        if (cache.isFullyCached(it)) key else null
     }.reversed().groupBy { it.trackId }.mapNotNull {
-        var (id, _, extId) = it.value.first()
+        var (id, _, _, extId) = it.value.first()
         val state = Cached.getMedia<Track>(app, extId, id).getOrNull()
             ?: return@mapNotNull null
         if (extId == UNIFIED_ID) extId = state.item.extras[EXTENSION_ID] ?: return@mapNotNull null

@@ -1,7 +1,9 @@
 package dev.brahmkshatriya.echo.ui.feed
 
+import android.util.TypedValue
 import android.view.LayoutInflater
 import android.view.ViewGroup
+import androidx.core.content.ContextCompat
 import androidx.core.view.isVisible
 import androidx.core.widget.addTextChangedListener
 import com.google.android.material.chip.Chip
@@ -12,17 +14,21 @@ import dev.brahmkshatriya.echo.common.models.Track
 import dev.brahmkshatriya.echo.databinding.ItemFeedButtonsBinding
 import dev.brahmkshatriya.echo.ui.common.GridAdapter
 import dev.brahmkshatriya.echo.utils.ui.AnimationUtils.animateVisibility
+import dev.brahmkshatriya.echo.utils.ui.UiUtils.isTv
 import dev.brahmkshatriya.echo.utils.ui.scrolling.ScrollAnimRecyclerAdapter
 import dev.brahmkshatriya.echo.utils.ui.scrolling.ScrollAnimViewHolder
 
 class ButtonsAdapter(
     private val viewModel: FeedData,
     private val listener: FeedClickListener,
-    private val getAllLoaded: () -> List<Track>
+    private val getAllLoaded: () -> List<Track>,
+    private val onCreatePlaylistClick: (() -> Unit)? = null,
+    private val onEditPlaylistClick: (() -> Unit)? = null,
+    private val onMicClick: () -> Unit,
 ) : ScrollAnimRecyclerAdapter<ButtonsAdapter.ViewHolder>(), GridAdapter {
     override fun getItemCount() = 1
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int) =
-        ViewHolder(parent, viewModel, listener, getAllLoaded)
+        ViewHolder(parent, viewModel, listener, getAllLoaded, onCreatePlaylistClick, onEditPlaylistClick, onMicClick)
 
     var buttons: FeedData.Buttons? = null
         set(value) {
@@ -47,6 +53,9 @@ class ButtonsAdapter(
         private val viewModel: FeedData,
         private val listener: FeedClickListener,
         private val getAllLoaded: () -> List<Track>,
+        private val onCreatePlaylistClick: (() -> Unit)? = null,
+        private val onEditPlaylistClick: (() -> Unit)? = null,
+        private val onMicClick: () -> Unit,
         private val binding: ItemFeedButtonsBinding = ItemFeedButtonsBinding.inflate(
             LayoutInflater.from(parent.context), parent, false
         )
@@ -55,6 +64,9 @@ class ButtonsAdapter(
         private var feed: FeedData.Buttons? = null
 
         init {
+            binding.micButton.setOnClickListener { onMicClick() }
+            binding.createPlaylistButton.setOnClickListener { onCreatePlaylistClick?.invoke() }
+            binding.editPlaylistButton.setOnClickListener { onEditPlaylistClick?.invoke() }
             binding.searchToggleButton.addOnCheckedChangeListener { _, isChecked ->
                 viewModel.searchToggled = isChecked
                 if (!isChecked) {
@@ -93,6 +105,19 @@ class ButtonsAdapter(
                 } else null
                 listener.onPlayClicked(it, feed?.extensionId, feed?.item, list, true)
             }
+            // TV only (phone: isTv() == false → no-op, layout unchanged): add the focus frame to each feed
+            // action button so D-pad focus is visible. New Drawable instance per button (foregrounds must
+            // not be shared across views).
+            if (binding.root.context.isTv()) {
+                val ctx = binding.root.context
+                listOf(
+                    binding.shuffleButton, binding.playButton, binding.searchToggleButton,
+                    binding.sortToggleButton, binding.createPlaylistButton, binding.editPlaylistButton,
+                    binding.micButton, binding.searchClose
+                ).forEach { it.foreground = ContextCompat.getDrawable(ctx, R.drawable.tv_focus_pill) }
+                // playButton is the only text button here — bump its 10-foot text size.
+                binding.playButton.setTextSize(TypedValue.COMPLEX_UNIT_SP, 18f)
+            }
         }
 
         fun bind(feed: FeedData.Buttons?) {
@@ -108,6 +133,8 @@ class ButtonsAdapter(
             binding.shuffleButton.isVisible = buttons.showPlayAndShuffle
             binding.searchToggleButton.isVisible = buttons.showSearch
             binding.sortToggleButton.isVisible = buttons.showSort
+            binding.createPlaylistButton.isVisible = onCreatePlaylistClick != null
+            binding.editPlaylistButton.isVisible = onEditPlaylistClick != null
         }
 
         fun onViewDetached() {

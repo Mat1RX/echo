@@ -162,18 +162,17 @@ class EditPlaylistViewModel(
             val playlist = playlistFlow.value!!.getOrThrow()
             val extension = extensionFlow.value!!
             if (playlist.title != nameFlow.value || playlist.description != descriptionFlow.value) {
-                extension.getAs<PlaylistEditClient, Unit> {
+                extension.getAs<PlaylistEditClient, Any?> {
                     editPlaylistMetadata(playlist, nameFlow.value, descriptionFlow.value)
                 }.getOrThrow()
             }
-            val cover = coverFlow.value
-            when (cover) {
+            when (val cover = coverFlow.value) {
                 CoverState.Initial -> {}
-                CoverState.Removed -> extension.getAs<PlaylistEditCoverClient, Unit> {
+                CoverState.Removed -> extension.getAs<PlaylistEditCoverClient, Any?> {
                     editPlaylistCover(playlist, null)
                 }
 
-                is CoverState.Changed -> extension.getAs<PlaylistEditCoverClient, Unit> {
+                is CoverState.Changed -> extension.getAs<PlaylistEditCoverClient, Any?> {
                     editPlaylistCover(playlist, cover.file)
                 }
             }
@@ -183,11 +182,11 @@ class EditPlaylistViewModel(
 
             var tracks = originalList.value!!.getOrThrow()
             val selectedTab = selectedTabFlow.value
-            extension.getIf<PlaylistEditorListenerClient, Unit> {
+            extension.getIf<PlaylistEditorListenerClient, Any?> {
                 onEnterPlaylistEditor(playlist, tracks)
             }.getOrThrow()
 
-            extension.getAs<PlaylistEditClient, Unit> {
+            extension.getAs<PlaylistEditClient, Any?> {
                 newActions.forEach { action ->
                     when (action) {
                         is Action.Add -> {
@@ -213,9 +212,11 @@ class EditPlaylistViewModel(
                     }
                 }
             }.getOrThrow()
-            extension.getIf<PlaylistEditorListenerClient, Unit> {
+            // .map { } drops the Any? result to Unit so the runCatching stays typed Result<Unit> for
+            // SaveState.Saved; the call still runs and still throws on failure (no trailing Unit needed).
+            extension.getIf<PlaylistEditorListenerClient, Any?> {
                 onExitPlaylistEditor(playlist, tracks)
-            }.getOrThrow()
+            }.map { }.getOrThrow()
         })
         saved.result.getOrThrow(app.throwFlow)
         emit(saved)

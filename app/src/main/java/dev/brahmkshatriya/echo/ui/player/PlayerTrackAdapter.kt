@@ -76,7 +76,10 @@ class PlayerTrackAdapter(
         private val isLandscape = context.isLandscape()
         fun updateCollapsed() = uiViewModel.run {
             val insets = if (!isLandscape) systemInsets.value else getCombined()
-            val targetPosX = collapsedPadding + if (context.isRTL()) insets.end else insets.start
+            // Full-width mini-bar: land the morphed cover flush at insets.start (matching the overlay
+            // collapsedTrackCover), NOT collapsedPadding+insets.start — otherwise the two covers sit
+            // 8dp apart and the duplicate shows. Both now stack at the same flush position.
+            val targetPosX = if (context.isRTL()) insets.end else insets.start
             val targetPosY = if (playerSheetState.value != STATE_EXPANDED) 0
             else collapsedPadding + systemInsets.value.top
             targetX = targetPosX - cover.left
@@ -140,6 +143,7 @@ class PlayerTrackAdapter(
         }
 
         private var coverDrawable: Drawable? = null
+        private var lastBoundMediaId: String? = null
         fun applyDrawable() {
             val index = bindingAdapterPosition.takeIf { it != RecyclerView.NO_POSITION } ?: return
             val item = getItem(index) ?: return
@@ -149,11 +153,8 @@ class PlayerTrackAdapter(
             currentDrawableListener?.invoke(drawable)
         }
 
-        fun bind(item: MediaItem?) {
-            binding.playerCollapsed.run {
-                collapsedTrackTitle.text = item?.track?.title
-                collapsedTrackArtist.text = item?.track?.artists?.joinToString(", ") { it.name }
-            }
+        fun retryLoad(item: MediaItem?) {
+            if (coverDrawable != null) return
             val old = item?.unloadedCover?.getCachedDrawable(binding.root.context)
             item?.track?.cover.loadWithThumb(binding.playerTrackCover, old) {
                 val image = it
@@ -161,6 +162,25 @@ class PlayerTrackAdapter(
                 setImageDrawable(image)
                 coverDrawable = it
                 applyDrawable()
+            }
+        }
+
+        fun bind(item: MediaItem?) {
+            binding.playerCollapsed.run {
+                collapsedTrackTitle.text = item?.track?.title
+                collapsedTrackArtist.text = item?.track?.artists?.joinToString(", ") { it.name }
+            }
+            if (item?.mediaId != lastBoundMediaId) {
+                lastBoundMediaId = item?.mediaId
+                coverDrawable = null
+                val old = item?.unloadedCover?.getCachedDrawable(binding.root.context)
+                item?.track?.cover.loadWithThumb(binding.playerTrackCover, old) {
+                    val image = it
+                        ?: ResourcesCompat.getDrawable(resources, R.drawable.art_music, context.theme)
+                    setImageDrawable(image)
+                    coverDrawable = it
+                    applyDrawable()
+                }
             }
             updateInsets()
             updateColors()
@@ -203,6 +223,8 @@ class PlayerTrackAdapter(
         holder.updateInsets()
         holder.updateColors()
         holder.applyDrawable()
+        val pos = holder.bindingAdapterPosition
+        if (pos != RecyclerView.NO_POSITION) holder.retryLoad(getItem(pos))
     }
 
     override fun onViewDetachedFromWindow(holder: ViewHolder) {

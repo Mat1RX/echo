@@ -3,6 +3,7 @@ package dev.brahmkshatriya.echo.ui.main
 import android.os.Bundle
 import android.view.View
 import androidx.fragment.app.Fragment
+import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
 import com.google.android.material.transition.MaterialSharedAxis
 import dev.brahmkshatriya.echo.R
 import dev.brahmkshatriya.echo.common.clients.HomeFeedClient
@@ -13,7 +14,9 @@ import dev.brahmkshatriya.echo.common.models.Shelf
 import dev.brahmkshatriya.echo.databinding.FragmentHomeBinding
 import dev.brahmkshatriya.echo.extensions.ExtensionUtils.getAs
 import dev.brahmkshatriya.echo.extensions.cache.Cached
+import androidx.recyclerview.widget.RecyclerView
 import dev.brahmkshatriya.echo.ui.common.GridAdapter.Companion.configureGridLayout
+import dev.brahmkshatriya.echo.ui.common.TvAwareRecyclerView
 import dev.brahmkshatriya.echo.ui.common.UiViewModel
 import dev.brahmkshatriya.echo.ui.common.UiViewModel.Companion.applyBackPressCallback
 import dev.brahmkshatriya.echo.ui.common.UiViewModel.Companion.configure
@@ -51,11 +54,18 @@ class HomeFragment : Fragment(R.layout.fragment_home) {
 
     private val listener by lazy { getFeedListener(requireParentFragment()) }
     private val feedAdapter by lazy { getFeedAdapter(feedData, listener) }
+    private var swipeRefresh: SwipeRefreshLayout? = null
+
+    override fun onHiddenChanged(hidden: Boolean) {
+        super.onHiddenChanged(hidden)
+        if (hidden) swipeRefresh?.isRefreshing = false
+    }
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         val binding = FragmentHomeBinding.bind(view)
+        val recyclerView = binding.recyclerView as RecyclerView
         setupTransition(view, false, MaterialSharedAxis.Y)
-        applyInsets(binding.recyclerView, binding.appBarOutline) {
+        applyInsets(recyclerView, binding.appBarOutline) {
             binding.swipeRefresh.configure(it)
         }
         val uiViewModel by activityViewModel<UiViewModel>()
@@ -71,15 +81,20 @@ class HomeFragment : Fragment(R.layout.fragment_home) {
             uiViewModel.currentNavBackground.value = bg
         }
         applyBackPressCallback()
-        getTouchHelper(listener).attachToRecyclerView(binding.recyclerView)
+        getTouchHelper(listener).attachToRecyclerView(recyclerView)
         configureGridLayout(
-            binding.recyclerView,
-            feedAdapter.withLoading(this, HeaderAdapter(this))
+            recyclerView,
+            feedAdapter.withLoading(this, HeaderAdapter(this)),
         )
+        (recyclerView as? TvAwareRecyclerView)?.navRailView =
+            requireActivity().findViewById(R.id.navRailContainer)
+        swipeRefresh = binding.swipeRefresh
         binding.swipeRefresh.run {
             setOnRefreshListener { feedData.refresh() }
+            var hasEverLoaded = false
             observe(feedData.isRefreshingFlow) {
-                isRefreshing = it
+                if (!it) hasEverLoaded = true
+                isRefreshing = hasEverLoaded && it
             }
         }
     }

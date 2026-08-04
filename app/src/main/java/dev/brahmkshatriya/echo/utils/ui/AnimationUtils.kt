@@ -1,6 +1,5 @@
 package dev.brahmkshatriya.echo.utils.ui
 
-import android.animation.ValueAnimator
 import android.content.Context
 import android.content.Context.MODE_PRIVATE
 import android.view.View
@@ -13,7 +12,6 @@ import android.view.animation.Interpolator
 import android.view.animation.RotateAnimation
 import android.view.animation.ScaleAnimation
 import android.view.animation.TranslateAnimation
-import androidx.core.animation.doOnEnd
 import androidx.core.view.doOnLayout
 import androidx.core.view.doOnPreDraw
 import androidx.core.view.forEach
@@ -46,34 +44,6 @@ object AnimationUtils {
         FastOutSlowInInterpolator()
     )
 
-    fun View.animateMarginTop(hide: Boolean, onEnd: (() -> Unit)? = null) {
-        if (!animations) {
-            isVisible = hide
-            return
-        }
-        isVisible = true
-        val fromMargin = (layoutParams as ViewGroup.MarginLayoutParams).topMargin
-        val toMargin = if (hide) 0 else -height
-        val fromAlpha = alpha
-        val toAlpha = if (hide) 1f else 0f
-
-        val animator = ValueAnimator.ofFloat(0f, 1f)
-        animator.addUpdateListener { valueAnimator ->
-            val fraction = valueAnimator.animatedFraction
-            val params = layoutParams as ViewGroup.MarginLayoutParams
-            params.topMargin = (fromMargin + (toMargin - fromMargin) * fraction).toInt()
-            layoutParams = params
-            alpha = fromAlpha + (toAlpha - fromAlpha) * fraction
-        }
-        animator.duration = animationDuration
-        animator.interpolator = getInterpolator(context)
-        animator.doOnEnd {
-            isVisible = hide
-            onEnd?.invoke()
-        }
-        animator.start()
-    }
-
     fun NavigationBarView.animateTranslation(
         isRail: Boolean,
         isMainFragment: Boolean,
@@ -81,7 +51,7 @@ object AnimationUtils {
         animate: Boolean = true,
         action: (Float) -> Unit
     ) = doOnLayout {
-        val visible = isMainFragment && isPlayerCollapsed
+        val visible = if (isRail) true else isPlayerCollapsed
         val value = if (visible) 0f
         else if (isRail) -width.toFloat() else height.toFloat()
         if (animations && animate) {

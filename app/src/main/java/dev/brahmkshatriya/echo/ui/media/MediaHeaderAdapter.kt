@@ -1,11 +1,11 @@
 package dev.brahmkshatriya.echo.ui.media
 
 import android.content.Context
-import android.icu.text.CompactDecimalFormat
 import android.text.SpannableString
 import android.text.Spanned
 import android.text.method.LinkMovementMethod
 import android.view.LayoutInflater
+import androidx.core.text.HtmlCompat
 import android.view.View
 import android.view.ViewGroup
 import android.widget.TextView
@@ -15,6 +15,7 @@ import androidx.core.view.updateLayoutParams
 import androidx.core.view.updatePaddingRelative
 import androidx.fragment.app.Fragment
 import androidx.fragment.app.activityViewModels
+import android.icu.text.CompactDecimalFormat
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import dev.brahmkshatriya.echo.R
 import dev.brahmkshatriya.echo.common.models.Album
@@ -42,6 +43,7 @@ import dev.brahmkshatriya.echo.ui.media.MediaFragment.Companion.getBundle
 import dev.brahmkshatriya.echo.ui.player.PlayerViewModel
 import dev.brahmkshatriya.echo.utils.ui.SimpleItemSpan
 import dev.brahmkshatriya.echo.utils.ui.UiUtils.dpToPx
+import dev.brahmkshatriya.echo.utils.ui.UiUtils.toCompactDurationString
 import dev.brahmkshatriya.echo.utils.ui.UiUtils.toTimeString
 import dev.brahmkshatriya.echo.utils.ui.scrolling.ScrollAnimRecyclerAdapter
 import dev.brahmkshatriya.echo.utils.ui.scrolling.ScrollAnimViewHolder
@@ -190,7 +192,7 @@ class MediaHeaderAdapter(
                 if (state.isFollowed == true) R.string.unfollow else R.string.follow
             )
 
-            savedButton.isVisible = state.isSaved != null
+            savedButton.isVisible = state.isSaved != null && !(state.item is Playlist && state.item.isEditable) && !fromPlayer
             savedButton.isChecked = state.isSaved ?: false
             savedButton.contentDescription = root.context.getString(
                 if (state.isSaved == true) R.string.unsave else R.string.save
@@ -209,8 +211,8 @@ class MediaHeaderAdapter(
             )
 
             playButton.isVisible = state.item is Track && !fromPlayer && state.item.isPlayable == Track.Playable.Yes
-            radioButton.isVisible = state.showRadio
-            shareButton.isVisible = state.showShare
+            radioButton.isVisible = state.showRadio && !fromPlayer
+            shareButton.isVisible = state.showShare && !fromPlayer
             configureButtons()
 
             explicit.isVisible = state.item.isExplicit
@@ -288,6 +290,11 @@ class MediaHeaderAdapter(
         } else this
 
         private const val DIVIDER = " • "
+        private fun String.parseHtml(): String {
+            return HtmlCompat.fromHtml(this, HtmlCompat.FROM_HTML_MODE_COMPACT)
+                .toString().trim()
+        }
+
         fun Context.getSpan(
             compact: Boolean,
             extensionId: String,
@@ -297,24 +304,35 @@ class MediaHeaderAdapter(
             is EchoMediaItem.Lists -> {
                 val madeBy = item.artists.joinToString(", ") { it.name }
                 val span = SpannableString(buildString {
-                    val firstRow = listOfNotNull(
-                        getString(item.typeInt),
-                        item.date?.toString(),
-                    ).joinToString(DIVIDER)
-                    val secondRow = listOfNotNull(
-                        item.toTrackString(this@getSpan),
-                        item.duration?.toTimeString()
-                    ).joinToString(DIVIDER)
+                    val firstRow = when (item) {
+                        is Playlist -> listOfNotNull(
+                            getString(item.typeInt),
+                            item.date?.toString(),
+                            item.duration?.toCompactDurationString()
+                        ).joinToString(DIVIDER)
+                        else -> listOfNotNull(
+                            getString(item.typeInt),
+                            item.date?.toString(),
+                        ).joinToString(DIVIDER)
+                    }
+                    val secondRow = when (item) {
+                        is Album -> ""
+                        is Playlist -> ""
+                        else -> listOfNotNull(
+                            item.toTrackString(this@getSpan),
+                            item.duration?.toTimeString()
+                        ).joinToString(DIVIDER)
+                    }
                     if (firstRow.isNotEmpty()) appendLine(firstRow)
                     if (secondRow.isNotEmpty()) appendLine(secondRow)
-                    val desc = item.description
+                    val desc = item.description?.parseHtml()?.takeIf { it.isNotEmpty() }
                     if (desc != null) {
                         appendLine()
                         appendLine(if (compact) desc.ellipsize() else desc)
                     }
                     if (madeBy.isNotEmpty()) {
-                        appendLine()
-                        appendLine(getString(R.string.by_x, madeBy))
+                        if (item is Album) appendLine()
+                        appendLine(madeBy)
                     }
                     if (item.label != null) {
                         appendLine()
@@ -338,66 +356,72 @@ class MediaHeaderAdapter(
             }
 
             is Artist -> {
-                val desc = if (compact) item.bio?.ellipsize() else item.bio
+                val desc = if (compact) item.bio?.parseHtml()?.ellipsize() 
+                    else item.bio?.parseHtml()
                 SpannableString(desc ?: "")
             }
 
             is Track -> {
                 SpannableString(buildString {
-                    val firstRow = listOfNotNull(
-                        getString(
-                            when (item.type) {
-                                Track.Type.Song, Track.Type.VideoSong -> R.string.song
-                                Track.Type.Video, Track.Type.HorizontalVideo -> R.string.video
-                                Track.Type.Podcast -> R.string.podcast
-                            }
-                        ),
-                        item.releaseDate
-                    ).joinToString(DIVIDER)
-                    val secondRow = listOfNotNull(
+                    val casualRow = listOfNotNull(
                         item.duration?.toTimeString(),
-                        if (item.plays != null) {
-                            val formatter = CompactDecimalFormat.getInstance()
-                            getString(R.string.x_plays, formatter.format(item.plays))
-                        } else null
+                        item.releaseDate?.toString()
                     ).joinToString(DIVIDER)
-                    if (firstRow.isNotEmpty()) appendLine(firstRow)
-                    if (secondRow.isNotEmpty()) appendLine(secondRow)
+                    if (casualRow.isNotEmpty()) appendLine(casualRow)
+
                     val notPlayable = item.playableString(this@getSpan)
                     if (!notPlayable.isNullOrEmpty()) {
                         appendLine()
                         appendLine(notPlayable)
                     }
-                    val desc = item.description
+
+                    val desc = item.description?.parseHtml()
                     if (desc != null) {
                         appendLine()
                         appendLine(if (compact) desc.ellipsize() else desc)
+                    }
+
+                    val writtenBy = item.extras["CONTRIB_AUTHOR"]
+                    val contribs = listOf(
+                        "CONTRIB_AUTHOR" to "WRITTEN BY",
+                        "CONTRIB_COMPOSER" to "COMPOSED BY",
+                        "CONTRIB_PRODUCER" to "PRODUCED BY",
+                        "CONTRIB_ENGINEER" to "ENGINEER"
+                    ).mapNotNull { (key, label) ->
+                        val names = item.extras[key]
+                        if (names.isNullOrEmpty()) return@mapNotNull null
+                        if (key == "CONTRIB_COMPOSER" && names == writtenBy) return@mapNotNull null
+                        label to names
+                    }
+                    if (contribs.isNotEmpty()) {
                         appendLine()
-                    }
-                    val genres = item.genres.joinToString(", ")
-                    if (genres.isNotEmpty()) {
-                        appendLine(getString(R.string.genres_x, genres))
-                    }
-                    val isrc = item.isrc
-                    if (isrc != null) {
-                        appendLine(getString(R.string.isrc_x, isrc))
-                    }
-                    val label = item.album?.label
-                    if (label != null) {
-                        appendLine()
-                        appendLine(label)
-                    }
-                    val lastRow = listOfNotNull(
-                        item.albumDiscNumber?.let {
-                            getString(R.string.disc_number_n, it)
-                        },
-                        item.albumOrderNumber?.let {
-                            getString(R.string.album_order_n, it)
+                        contribs.forEachIndexed { idx, (label, names) ->
+                            if (idx > 0) appendLine()
+                            appendLine(label)
+                            appendLine(names)
                         }
+                    }
+
+                    val genres = item.genres.joinToString(", ")
+                    val isrc = item.isrc
+                    val albumLabel = item.album?.label
+                    val discTrack = listOfNotNull(
+                        item.albumDiscNumber?.let { getString(R.string.disc_number_n, it) },
+                        item.albumOrderNumber?.let { getString(R.string.album_order_n, it) }
                     ).joinToString(DIVIDER)
-                    if (lastRow.isNotEmpty()) {
+                    val specs = listOfNotNull(
+                        if (genres.isNotEmpty()) "GENRE" to genres else null,
+                        if (isrc != null) "ISRC" to isrc else null,
+                        if (albumLabel != null) "LABEL" to albumLabel else null,
+                        if (discTrack.isNotEmpty()) "DISC / TRACK" to discTrack else null
+                    )
+                    if (specs.isNotEmpty()) {
                         appendLine()
-                        appendLine(lastRow)
+                        specs.forEachIndexed { idx, (specLabel, specValue) ->
+                            if (idx > 0) appendLine()
+                            appendLine(specLabel)
+                            appendLine(specValue)
+                        }
                     }
                 }.trimStart('\n').trimEnd('\n'))
             }
@@ -428,6 +452,17 @@ class MediaHeaderAdapter(
             }
 
             override fun onSavedClicked(view: View, saved: Boolean) {
+                if (!saved) {
+                    val item = viewModel.itemResultFlow.value?.getOrNull()?.item
+                    if (item is Playlist && !item.isEditable) {
+                        MaterialAlertDialogBuilder(requireContext())
+                            .setMessage(getString(R.string.remove_from_library_confirm, item.title))
+                            .setNegativeButton(R.string.cancel, null)
+                            .setPositiveButton(R.string.remove) { _, _ -> viewModel.saveToLibrary(false) }
+                            .show()
+                        return
+                    }
+                }
                 viewModel.saveToLibrary(saved)
             }
 

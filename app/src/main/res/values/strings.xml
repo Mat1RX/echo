@@ -15,11 +15,13 @@
     <string name="notifications">Notifications</string>
     <string name="notifications_permission_summary">To show notification for downloads and music</string>
     <string name="remove">Remove</string>
+    <string name="remove_from_history">Remove from History</string>
     <string name="more_by_x">More by %1$s</string>
     <string name="songs">Songs</string>
     <string name="albums">Albums</string>
     <string name="x_radio">%1$s Radio</string>
     <string name="cached_songs">Cached Songs</string>
+    <string name="cached">Cached</string>
     <string name="cache_playlist_warning">Experimental Feature. Anything except listening to them is not supported.</string>
     <string name="artists">Artists</string>
     <string name="recently_added">Recently Added</string>
@@ -54,6 +56,7 @@
     <string name="repeat_all">Repeat All</string>
     <string name="home">Home</string>
     <string name="search">Search</string>
+    <string name="aa_browse">Browse</string>
     <string name="library">Library</string>
     <string name="more">More</string>
     <string name="extension">Extension</string>
@@ -69,13 +72,21 @@
     <string name="view">View</string>
 
     <string name="extension_out_of_date">Out of date</string>
+    <string name="extension_failed_to_load_x">Failed to load extension: %1$s</string>
+    <string name="extension_incompatible_version">Incompatible with this app version — some features may not work</string>
     <string name="no_internet">No Internet</string>
     <string name="error_loading_extension_from_x">Error loading extension from %1$s</string>
     <string name="extension_x_not_found">Extension %1$s not found</string>
+    <string name="removed_extension_playback_stopped">Nothing to play: the extension for these tracks is no longer installed</string>
+    <string name="server_error_skipping">Server error, skipping affected tracks</string>
+    <string name="couldnt_copy_to_clipboard">Couldn\'t copy to clipboard</string>
     <string name="required_extensions_missing_x">Required extensions missing: %1$s</string>
     <string name="x_login_required">%1$s login required</string>
     <string name="x_is_not_supported_in_x">%1$s is not supported in %2$s</string>
     <string name="account_session_expired_in_x">Account session expired in %1$s</string>
+    <string name="playback_error_no_connection">No connection — check your phone</string>
+    <string name="playback_error_login_required">Sign in on your phone to continue</string>
+    <string name="playback_error_generic">Can\'t play this track</string>
     <string name="error_x">Error: %1$s</string>
     <string name="str_copy">Copy</string>
     <string name="extensions">Extensions</string>
@@ -99,11 +110,15 @@
     <string name="bass_boost">Bass Boost</string>
     <string name="bass_boost_desc">Larger value may distort the sound.</string>
     <string name="change_pitch_with_speed_desc">Get that slow-motion sound</string>
+    <string name="audio_processing">Enable Audio Effects</string>
+    <string name="audio_processing_summary">Enable internal audio effects like Loudness Normalization and Bass Boost. Turn off to bypass internal processing and save battery.</string>
     <string name="equalizer">Equalizer</string>
     <string name="equalizer_summary">Open the device equalizer settings</string>
+    <string name="no_system_equalizer">No system equalizer available on this device</string>
+    <string name="some_tracks_couldnt_be_restored">Some tracks couldn\'t be restored — reopen from Library</string>
 
-    <string name="stream_quality">Stream Quality</string>
-    <string name="stream_quality_summary">Select the default quality of the stream</string>
+    <string name="stream_quality">Mobile Data Stream Quality</string>
+    <string name="stream_quality_summary">Default quality when streaming on mobile data. Can be overridden per extension in extension settings.</string>
     <string name="x_specific_quality_summary">%1$s specific stream quality, will override the default stream quality selection</string>
 
     <string-array name="stream_qualities">
@@ -112,8 +127,9 @@
         <item>Lowest</item>
     </string-array>
 
-    <string name="unmetered_stream_quality">Unmetered Stream Quality</string>
-    <string name="unmetered_stream_quality_summary">The quality of the stream when connected to an unmetered network. This will override the default stream quality.</string>
+    <string name="unmetered_stream_quality">Wi-Fi Stream Quality</string>
+    <string name="unmetered_stream_quality_summary">Quality when streaming on Wi-Fi or other unmetered connections. Can be overridden per extension in extension settings. Set to Auto to use the Mobile Data Stream Quality setting globally.</string>
+    <string name="unmetered_stream_quality_auto">Auto (Use Mobile Data setting)</string>
 
     <string name="behavior">Behavior</string>
 
@@ -126,8 +142,36 @@
     <string name="skip_silence">Skip Silence</string>
     <string name="skip_silence_summary">Skip silent part in the song, to provide gapless playback.</string>
 
+    <string name="preload_track">Preload track in background</string>
+    <string name="preload_track_summary">Cache the full track in the background for offline availability.</string>
+    <string name="preload_future_tracks">Preload duration for next tracks</string>
+    <string name="preload_future_tracks_summary">Seconds of future tracks to cache in advance (10s for gapless).</string>
+    <string name="cache_in_ram_only">Cache in RAM only</string>
+    <string name="cache_in_ram_only_summary">Store cached data in temporary memory instead of storage (protects flash drive).</string>
+
+    <string name="hardware_audio_offload">Hardware Audio Offload (Experimental)</string>
+    <string name="hardware_audio_offload_summary">Bypasses CPU for audio decoding to save battery. May cause audio drops or gapless playback issues on some devices.</string>
+
+    <string name="loudness_normalization">Loudness Normalization (Experimental)</string>
+    <string name="loudness_normalization_summary">Normalize volume levels between tracks. May distort audio quality or compress dynamic range.</string>
+
+    <string name="skip_fade_adaptive">Adaptive fade out</string>
+    <string name="skip_fade_adaptive_summary">Extend fade out duration while track is buffering</string>
+    <string name="skip_fade_duration">Skip fade duration (ms)</string>
+    <string name="skip_fade_duration_summary">Duration of the fade-out when skipping a track manually</string>
+    <string name="pause_fade">Pause fade duration (ms)</string>
+    <string name="pause_fade_summary">Duration of the fade-out when pausing playback</string>
+    <string name="resume_fade">Resume fade duration (ms)</string>
+    <string name="resume_fade_summary">Duration of the fade-in when resuming playback</string>
+
+    <string name="history">History</string>
+    <string name="clear_history">Clear History</string>
+    <string name="history_item_subtitle">%1$s · %2$s</string>
+
     <string name="auto_start_radio">Auto Start Radio</string>
     <string name="auto_start_radio_summary">Automatically add related songs of track in the playlist, to have an infinite queue</string>
+    <string name="auto_timed_out">Content took too long to load, please try again</string>
+    <string name="auto_error_loading">Failed to load content</string>
 
     <string name="cache_size">Cache Size</string>
     <string name="cache_size_summary">Size in MB to cache audio and video</string>
@@ -158,7 +202,11 @@
     <string name="extension_installed">%1$s (Installed)</string>
     <string name="add_extensions">Add Extensions</string>
     <string name="invalid_extension_list">Invalid extensions list</string>
+    <string name="invalid_settings_file">Invalid or incompatible settings file</string>
+    <string name="unsupported_update_source_for_x">%1$s uses an unsupported update source</string>
     <string name="checking_for_updates">Checking for updates</string>
+    <string name="checking_for_extension_updates">Checking for third-party extension updates</string>
+    <string name="all_extensions_up_to_date">All third-party extensions are up to date</string>
 
     <string name="look_and_feel">Look and Feel</string>
 
@@ -221,6 +269,22 @@
     <string name="logout">Logout</string>
     <string name="switch_account">Switch Account</string>
     <string name="incognito">Incognito</string>
+    <string name="link_tv_device">Link TV Device</string>
+    <string name="now_playing">Now Playing</string>
+    <string name="coming_soon">Coming soon</string>
+    <string name="tv_pairing_title">Link Echo on your phone</string>
+    <string name="tv_pairing_options_intro">Or enter the code another way:</string>
+    <string name="tv_pairing_option_1">1. Scan the QR code above to open Echo on your phone</string>
+    <string name="tv_pairing_option_2">2. Open Echo on your phone → Settings → Link TV Device → enter the code</string>
+    <string name="tv_pairing_option_3">3. Visit brahmkshatriya.github.io/echo/pair.html and enter the code</string>
+    <string name="tv_pairing_waiting">Waiting for phone confirmation…</string>
+    <string name="tv_pairing_expired">Code expired</string>
+    <string name="tv_pairing_expires_in">Expires in: %1$ds</string>
+    <string name="tv_pairing_new_code">Generate new code</string>
+    <string name="tv_pairing_instructions">Enter the 6-character code shown on your TV, or scan its QR code with your camera app.</string>
+    <string name="tv_pairing_code_hint">Code (e.g. GX4821)</string>
+    <string name="qr_code">QR code</string>
+    <string name="tv_pairing_link_your_device">Link your device</string>
     <string name="not_logged_in">Not logged in</string>
     <string name="x_login">%1$s Login</string>
     <string name="x_is_required">%1$s is required</string>
@@ -284,6 +348,7 @@
     <string name="save_to_library">Save to library</string>
     <string name="saved_x_to_library">Saved %1$s to library</string>
     <string name="remove_from_library">Remove from library</string>
+    <string name="remove_from_library_confirm">Remove \"%1$s\" from your library?</string>
     <string name="removed_x_from_library">Removed %1$s from library</string>
 
     <string name="radio">Radio</string>
@@ -309,6 +374,7 @@
     <string name="save_to_playlist">Save to playlist</string>
     <string name="delete_playlist">Delete playlist</string>
     <string name="add_to_next">Add to next</string>
+    <string name="queue">Queue</string>
     <string name="add_to_queue">Add to queue</string>
     <string name="loading_radio_for_x">Loading radio for %1$s</string>
     <string name="playing_x">Playing %1$s</string>
@@ -318,14 +384,11 @@
     <string name="background_gradient_summary">A gradient color tint in  background depending on the context</string>
     <string name="all">All</string>
     <string name="edit_playlist">Edit Playlist</string>
-    <string name="more_brain_capacity">More Brain Capacity</string>
-    <string name="more_brain_capacity_summary">Enabling this, can help fix audio lag and increase battery usage (Disables the audio offloading).</string>
 
     <string name="track">Track</string>
     <string name="tracks">Tracks</string>
     <string name="sort">Sort</string>
     <string name="explicit">Explicit</string>
-    <string name="x_plays">%1$s Plays</string>
     <string name="x_followers">%1$s Followers</string>
     <string name="n_songs">%1$d Songs</string>
     <string name="n_episodes">%1$d Episodes</string>
@@ -378,6 +441,7 @@
     <string name="saving_x">Saving %1$s</string>
     <string name="saved_to_x">Saved to %1$s</string>
     <string name="saved_to_playlists">Saved to playlists</string>
+    <string name="couldnt_save_not_editable">Couldn\'t save to %1$d playlist(s) (not editable)</string>
     <string name="selected_n">Selected %1$d</string>
     <string name="adding_x">Adding %1$s</string>
     <string name="moving_x">Moving %1$s</string>
@@ -389,13 +453,10 @@
     <string name="merging_x">Merging %1$s</string>
     <string name="tagging_x">Tagging %1$s</string>
 
-    <string name="apply_player_color_to_app">Apply Player Color to the Entire App</string>
-    <string name="apply_player_color_to_app_summary">LAG ALERT!!!</string>
     <string name="delete_download">Delete Download</string>
     <string name="removed_x_from_downloads">Removed %1$s from Downloads</string>
     <string name="download_complete">Download Complete</string>
 
-    <string name="app_widget_description">Echo on your home screen!</string>
     <string name="opening_webview_x">Opening Webview: %1$s</string>
     <string name="no_update_available_for_x">No update available for %1$s</string>
     <string name="other">Other</string>
@@ -405,13 +466,18 @@
     <string name="guide">Guide</string>
     <string name="donate">Donate</string>
     <string name="contributors">Contributors</string>
-    <string name="app_desc">Just a music player.</string>
+    <string name="credit_echo" translatable="false">Based on Echo by brahmkshatriya</string>
+    <string name="app_desc">Your music, your way.</string>
     <string name="manage">Manage</string>
     <string name="no_account">No Account</string>
     <string name="other_settings">Other Settings</string>
 
     <string name="no_x_found">No %1$s found</string>
+    <string name="x_no_longer_available">%1$s is no longer available</string>
+    <string name="feed_truncated">Large list — sort and search cover the first %1$d items</string>
     <string name="playlist">Playlist</string>
+    <string name="playlists">Playlists</string>
+    <string name="voice_search">Voice search</string>
     <string name="album">Album</string>
     <string name="pre_release">Pre Release</string>
     <string name="single">Single</string>
@@ -421,15 +487,13 @@
     <string name="show">Show</string>
     <string name="book">Book</string>
     <string name="song">Song</string>
-    <string name="podcast">Podcast</string>
-    <string name="video">Video</string>
-    <string name="isrc_x">ISRC: %1$s</string>
-    <string name="genres_x">Genres: %1$s</string>
-    <string name="disc_number_n">Disc Number: %1$d</string>
-    <string name="album_order_n">Album Order Number: %1$d</string>
+    <string name="disc_number_n">Disc %1$d</string>
+    <string name="album_order_n">Track %1$d</string>
     <string name="confirmation">Confirmation</string>
     <string name="delete_playlist_confirmation">Are you sure you want to delete %1$s?</string>
+    <string name="playlist_cant_be_deleted">This playlist can\'t be deleted</string>
     <string name="confirm">Confirm</string>
+    <string name="done">Done</string>
     <string name="big_cover">Bigger Covers</string>
     <string name="big_cover_summary">Good for devices with larger screens</string>
     <string name="unhide">Unhide</string>
@@ -446,7 +510,6 @@
     <string name="vertical">Vertical</string>
     <string name="export_settings">Export Settings</string>
     <string name="export_settings_summary">Export settings to a file</string>
-    <string name="exported_to">Exported to %1$s</string>
     <string name="import_settings">Import Settings</string>
     <string name="import_settings_summary">Import settings from a file</string>
 </resources>

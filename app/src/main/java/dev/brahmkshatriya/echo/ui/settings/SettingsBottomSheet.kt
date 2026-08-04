@@ -131,7 +131,7 @@ class SettingsBottomSheet : BottomSheetDialogFragment(R.layout.dialog_settings) 
 
         binding.wiki.setOnClickListener {
             dismiss()
-            requireActivity().openLink("https://wotaku.wiki/guides/music/echo")
+            requireActivity().openLink("https://github.com/brahmkshatriya/echo#readme")
         }
 
         val repo = getString(R.string.app_github_repo)
@@ -140,24 +140,13 @@ class SettingsBottomSheet : BottomSheetDialogFragment(R.layout.dialog_settings) 
             requireActivity().openLink("https://github.com/$repo/graphs/contributors")
         }
 
-        binding.donate.setOnClickListener {
-            dismiss()
-            requireActivity().openLink("https://ko-fi.com/brahmkshatriya")
-        }
-
-        binding.discord.setOnClickListener {
-            dismiss()
-            requireActivity().openLink("https://discord.gg/J3WvbBUU8Z")
-        }
+        binding.donate.isVisible = false
+        binding.discord.isVisible = false
+        binding.telegram.isVisible = false
 
         binding.github.setOnClickListener {
             dismiss()
             requireActivity().openLink("https://github.com/$repo")
-        }
-
-        binding.telegram.setOnClickListener {
-            dismiss()
-            requireActivity().openLink("https://t.me/echo_extension")
         }
 
         binding.version.run {
@@ -180,9 +169,9 @@ class SettingsBottomSheet : BottomSheetDialogFragment(R.layout.dialog_settings) 
             }
         }
 
-        binding.shivam.setOnClickListener {
+        binding.creditEcho.setOnClickListener {
             dismiss()
-            requireActivity().openLink("https://github.com/brahmkshatriya")
+            requireActivity().openLink("https://github.com/brahmkshatriya/echo")
         }
 
         configureBottomBar(binding.extensionBar)

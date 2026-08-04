@@ -10,10 +10,12 @@ import dev.brahmkshatriya.echo.common.clients.TrackClient
 import dev.brahmkshatriya.echo.common.models.DownloadContext
 import dev.brahmkshatriya.echo.common.models.Progress
 import dev.brahmkshatriya.echo.common.models.Streamable
+import dev.brahmkshatriya.echo.common.models.Track
 import dev.brahmkshatriya.echo.di.App
 import dev.brahmkshatriya.echo.download.db.DownloadDatabase
 import dev.brahmkshatriya.echo.download.db.models.ContextEntity
 import dev.brahmkshatriya.echo.download.db.models.DownloadEntity
+import dev.brahmkshatriya.echo.download.db.models.DownloadSummary
 import dev.brahmkshatriya.echo.download.db.models.TaskType
 import dev.brahmkshatriya.echo.download.exceptions.DownloaderExtensionNotFoundException
 import dev.brahmkshatriya.echo.download.tasks.TaskManager
@@ -23,10 +25,12 @@ import dev.brahmkshatriya.echo.extensions.ExtensionUtils.getExtensionOrThrow
 import dev.brahmkshatriya.echo.extensions.ExtensionUtils.isClient
 import dev.brahmkshatriya.echo.extensions.builtin.unified.UnifiedExtension.Companion.EXTENSION_ID
 import dev.brahmkshatriya.echo.extensions.builtin.unified.UnifiedExtension.Companion.withExtensionId
+import dev.brahmkshatriya.echo.utils.Serializer.toData
 import dev.brahmkshatriya.echo.utils.Serializer.toJson
 import kotlinx.coroutines.CoroutineName
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
@@ -37,7 +41,7 @@ import kotlinx.coroutines.plus
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.io.File
-import java.util.WeakHashMap
+import java.util.concurrent.ConcurrentHashMap
 
 class Downloader(
     val app: App,
@@ -50,7 +54,7 @@ class Downloader(
         .find { it.isClient<DownloadClient>() && it.isEnabled }
         ?: throw DownloaderExtensionNotFoundException()
 
-    val scope = CoroutineScope(Dispatchers.IO) + CoroutineName("Downloader")
+    val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO + CoroutineName("Downloader"))
 
     val dao = database.downloadDao()
     val downloadFlow = dao.getDownloadsFlow()
@@ -99,32 +103,39 @@ class Downloader(
         workManager.enqueueUniqueWork(TAG, ExistingWorkPolicy.KEEP, request)
     }
 
-    @Suppress("IDENTITY_SENSITIVE_OPERATIONS_WITH_VALUE_TYPE")
-    private val servers = WeakHashMap<Long, Streamable.Media.Server>()
-    @Suppress("IDENTITY_SENSITIVE_OPERATIONS_WITH_VALUE_TYPE")
-    private val mutexes = WeakHashMap<Long, Mutex>()
+    private val trackCache = ConcurrentHashMap<Long, Track>()
+    fun getCachedTrack(id: Long): Track? = trackCache[id]
+    suspend fun getTrackData(id: Long): Track? = trackCache[id] ?: dao.getDownloadData(id)
+        ?.toData<Track>()?.getOrNull()?.also { trackCache[id] = it }
+
+    private val servers = ConcurrentHashMap<String, Streamable.Media.Server>()
+    private val mutexes = ConcurrentHashMap<String, Mutex>()
 
     suspend fun getServer(
         trackId: Long, download: DownloadEntity
-    ): Streamable.Media.Server = mutexes.getOrPut(trackId) { Mutex() }.withLock {
-        servers.getOrPut(trackId) {
-            val extensionId = download.extensionId
-            val extension = extensionLoader.music.getExtensionOrThrow(extensionId)
-            val streamable = download.track.getOrThrow()
-                .streamables.find { it.id == download.streamableId }!!
-            extension.getAs<TrackClient, Streamable.Media.Server> {
-                val media =
-                    loadStreamableMedia(streamable, true) as Streamable.Media.Server
-                media.sources.ifEmpty {
-                    throw Exception("${trackId}: No sources found")
-                }
-                media
-            }.getOrThrow()
+    ): Streamable.Media.Server {
+        val key = trackId.toString()
+        return mutexes.computeIfAbsent(key) { Mutex() }.withLock {
+            servers[key] ?: run {
+                val extensionId = download.extensionId
+                val extension = extensionLoader.music.getExtensionOrThrow(extensionId)
+                val streamable = download.track.getOrThrow()
+                    .streamables.find { it.id == download.streamableId }!!
+                extension.getAs<TrackClient, Streamable.Media.Server> {
+                    val media =
+                        loadStreamableMedia(streamable, true) as Streamable.Media.Server
+                    media.sources.ifEmpty {
+                        throw Exception("${trackId}: No sources found")
+                    }
+                    media
+                }.getOrThrow().also { servers[key] = it }
+            }
         }
     }
 
     fun cancel(trackId: Long) {
         taskManager.remove(trackId)
+        val key = trackId.toString()
         scope.launch {
             val entity = dao.getDownloadEntity(trackId) ?: return@launch
             dao.deleteDownloadEntity(entity)
@@ -132,8 +143,8 @@ class Downloader(
                 val file = File(it)
                 if (file.exists()) file.delete()
             }
-            servers.remove(trackId)
-            mutexes.remove(trackId)
+            servers.remove(key)
+            mutexes.remove(key)
         }
     }
 
@@ -148,8 +159,8 @@ class Downloader(
                 val file = File(it)
                 if (file.exists()) file.delete()
             }
-            servers.remove(trackId)
-            mutexes.remove(trackId)
+            servers.remove(trackId.toString())
+            mutexes.remove(trackId.toString())
             ensureWorker()
         }
     }
@@ -159,9 +170,9 @@ class Downloader(
         scope.launch {
             val downloads = downloadFlow.first().filter { it.finalFile == null }
             downloads.forEach { download ->
-                dao.deleteDownloadEntity(download)
-                servers.remove(download.id)
-                mutexes.remove(download.id)
+                dao.deleteDownloadEntityById(download.id)
+                servers.remove(download.id.toString())
+                mutexes.remove(download.id.toString())
             }
         }
     }
@@ -170,7 +181,7 @@ class Downloader(
         scope.launch {
             val downloads = downloadFlow.first().filter { it.trackId == id }
             downloads.forEach { download ->
-                dao.deleteDownloadEntity(download)
+                dao.deleteDownloadEntityById(download.id)
             }
         }
     }
@@ -184,14 +195,14 @@ class Downloader(
                     it.contextId == context.id
                 }
                 downloads.forEach { download ->
-                    dao.deleteDownloadEntity(download)
+                    dao.deleteDownloadEntityById(download.id)
                 }
             }
         }
     }
 
     data class Info(
-        val download: DownloadEntity,
+        val download: DownloadSummary,
         val context: ContextEntity?,
         val workers: List<Pair<TaskType, Progress>>
     )
@@ -210,7 +221,7 @@ class Downloader(
                     it.context?.id
                 }.flatMap { (id, infos) ->
                     if (id == null) infos.mapNotNull {
-                        it.download.track.getOrNull()
+                        getTrackData(it.download.id)
                             ?.withExtensionId(it.download.extensionId, false)
                     }
                     else listOfNotNull(infos.first().runCatching {

@@ -1,6 +1,8 @@
 package dev.brahmkshatriya.echo.utils.ui
 
 import android.R.attr.colorPrimary
+import android.content.Context
+import android.graphics.Bitmap
 import android.graphics.BitmapShader
 import android.graphics.Color
 import android.graphics.ComposeShader
@@ -35,7 +37,6 @@ object GradientDrawable {
             setShape(RectShape())
             shaderFactory = object : ShapeDrawable.ShaderFactory() {
                 override fun resize(width: Int, height: Int): Shader {
-                    val centerY = if (isRail) 1f else (height * 0.5f + bottom) / (height + bottom)
                     val startX = if (isRail) if (isRTL) width.toFloat() else 0f else width / 2f
                     val startY = if (isRail) height / 2f else 0f
                     val endX = if (isRail) if (isRTL) 0f else width.toFloat() else width / 2f
@@ -45,8 +46,13 @@ object GradientDrawable {
                         startY,
                         endX,
                         endY,
-                        intArrayOf(if (full) color else Color.TRANSPARENT, color, color),
-                        floatArrayOf(0f, centerY, 1f),
+                        intArrayOf(
+                            if (full) color else Color.TRANSPARENT,
+                            ColorUtils.setAlphaComponent(color, 153),
+                            ColorUtils.setAlphaComponent(color, 242),
+                            color
+                        ),
+                        floatArrayOf(0f, 0.4f, 0.8f, 1f),
                         Shader.TileMode.CLAMP
                     )
                 }
@@ -56,19 +62,14 @@ object GradientDrawable {
 
     private const val RATIO = 0.33f
     private val maxColor = Color.argb(128, 0, 0, 0)
-    fun createBlurred(view: View, toBlur: Drawable?): Drawable {
-        val background = MaterialColors.getColor(view, R.attr.echoBackground)
-        val primary = MaterialColors.getColor(view, colorPrimary)
+    fun createBlurred(context: Context, toBlur: Bitmap?): Drawable {
+        val background = MaterialColors.getColor(context, R.attr.echoBackground, Color.BLACK)
+        val primary = MaterialColors.getColor(context, colorPrimary, Color.BLACK)
         if (toBlur == null) return background.toDrawable()
         val noise = ResourcesCompat.getDrawable(
-            view.resources, R.drawable.grain_noise, view.context.theme
+            context.resources, R.drawable.grain_noise, context.theme
         )!!.toBitmap()
-        val bitmap = toBlur.run {
-            toBitmap(
-                intrinsicWidth.coerceAtLeast(1),
-                intrinsicHeight.coerceAtLeast(1),
-            )
-        }.blurred(view.context)
+        val bitmap = toBlur.blurred(context)
         return PaintDrawable().apply {
             setShape(RectShape())
             paint.shader = null

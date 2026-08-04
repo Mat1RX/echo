@@ -25,4 +25,3 @@ dependencyResolutionManagement {
 rootProject.name = "Echo"
 include(":app")
 include(":common")
- 

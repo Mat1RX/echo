@@ -2,8 +2,10 @@ package dev.brahmkshatriya.echo.ui.main
 
 import android.os.Bundle
 import android.view.View
-import androidx.core.view.isVisible
 import androidx.fragment.app.Fragment
+import androidx.lifecycle.lifecycleScope
+import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
+import kotlinx.coroutines.launch
 import com.google.android.material.transition.MaterialSharedAxis
 import dev.brahmkshatriya.echo.R
 import dev.brahmkshatriya.echo.common.clients.LibraryFeedClient
@@ -16,11 +18,12 @@ import dev.brahmkshatriya.echo.databinding.FragmentLibraryBinding
 import dev.brahmkshatriya.echo.extensions.ExtensionUtils.getAs
 import dev.brahmkshatriya.echo.extensions.ExtensionUtils.isClient
 import dev.brahmkshatriya.echo.extensions.cache.Cached
+import androidx.recyclerview.widget.RecyclerView
 import dev.brahmkshatriya.echo.ui.common.GridAdapter.Companion.configureGridLayout
+import dev.brahmkshatriya.echo.ui.common.TvAwareRecyclerView
 import dev.brahmkshatriya.echo.ui.common.SnackBarHandler.Companion.createSnack
 import dev.brahmkshatriya.echo.ui.common.UiViewModel
 import dev.brahmkshatriya.echo.ui.common.UiViewModel.Companion.applyBackPressCallback
-import dev.brahmkshatriya.echo.ui.common.UiViewModel.Companion.applyInsets
 import dev.brahmkshatriya.echo.ui.common.UiViewModel.Companion.configure
 import dev.brahmkshatriya.echo.ui.feed.FeedAdapter.Companion.getFeedAdapter
 import dev.brahmkshatriya.echo.ui.feed.FeedAdapter.Companion.getTouchHelper
@@ -57,9 +60,16 @@ class LibraryFragment : Fragment(R.layout.fragment_library) {
 
     private val listener by lazy { getFeedListener(requireParentFragment()) }
     private val feedAdapter by lazy { getFeedAdapter(feedData, listener) }
+    private var swipeRefresh: SwipeRefreshLayout? = null
+
+    override fun onHiddenChanged(hidden: Boolean) {
+        super.onHiddenChanged(hidden)
+        if (hidden) swipeRefresh?.isRefreshing = false
+    }
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         val binding = FragmentLibraryBinding.bind(view)
+        val recyclerView = binding.recyclerView as RecyclerView
         setupTransition(view, false, MaterialSharedAxis.Y)
         val headerAdapter = HeaderAdapter(this)
         val uiViewModel by activityViewModel<UiViewModel>()
@@ -73,29 +83,31 @@ class LibraryFragment : Fragment(R.layout.fragment_library) {
             if (curr != 2) return@observe
             uiViewModel.currentNavBackground.value = bg
         }
-        applyInsets(binding.recyclerView, binding.appBarOutline, 72) {
-            binding.createPlaylistContainer.applyInsets(it)
+        applyInsets(recyclerView, binding.appBarOutline) {
             binding.swipeRefresh.configure(it)
         }
         applyBackPressCallback()
-        getTouchHelper(listener).attachToRecyclerView(binding.recyclerView)
+        getTouchHelper(listener).attachToRecyclerView(recyclerView)
+        val parent = requireParentFragment()
         configureGridLayout(
-            binding.recyclerView,
-            feedAdapter.withLoading(this, headerAdapter)
+            recyclerView,
+            feedAdapter.withLoading(this, headerAdapter, onCreatePlaylistClick = {
+                lifecycleScope.launch {
+                    if (feedData.current.value?.isClient<PlaylistEditClient>() == true)
+                        CreatePlaylistBottomSheet().show(parent.parentFragmentManager, null)
+                }
+            }),
         )
+        (recyclerView as? TvAwareRecyclerView)?.navRailView =
+            requireActivity().findViewById(R.id.navRailContainer)
+        swipeRefresh = binding.swipeRefresh
         binding.swipeRefresh.run {
             setOnRefreshListener { feedData.refresh() }
+            var hasEverLoaded = false
             observe(feedData.isRefreshingFlow) {
-                isRefreshing = it
+                if (!it) hasEverLoaded = true
+                isRefreshing = hasEverLoaded && it
             }
-        }
-
-        observe(feedData.current) {
-            binding.createPlaylist.isVisible = it?.isClient<PlaylistEditClient>() ?: false
-        }
-        val parent = requireParentFragment()
-        binding.createPlaylist.setOnClickListener {
-            CreatePlaylistBottomSheet().show(parent.parentFragmentManager, null)
         }
 
         parent.parentFragmentManager.setFragmentResultListener("createPlaylist", this) { _, data ->

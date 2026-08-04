@@ -1,12 +1,12 @@
+@file:Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+
 package dev.brahmkshatriya.echo.ui.player.more.lyrics
 
-import android.annotation.SuppressLint
 import android.content.Context
 import android.os.Bundle
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
-import androidx.coordinatorlayout.widget.CoordinatorLayout
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat.CONSUMED
 import androidx.core.view.isVisible
@@ -19,7 +19,6 @@ import androidx.recyclerview.widget.ConcatAdapter
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.LinearSmoothScroller
 import androidx.recyclerview.widget.RecyclerView
-import com.google.android.material.behavior.HideViewOnScrollBehavior
 import com.google.android.material.bottomsheet.BottomSheetBehavior
 import com.google.android.material.transition.MaterialSharedAxis
 import dev.brahmkshatriya.echo.R
@@ -27,7 +26,6 @@ import dev.brahmkshatriya.echo.common.clients.LyricsSearchClient
 import dev.brahmkshatriya.echo.common.models.ExtensionType
 import dev.brahmkshatriya.echo.common.models.Lyrics
 import dev.brahmkshatriya.echo.databinding.FragmentPlayerLyricsBinding
-import dev.brahmkshatriya.echo.databinding.ItemLyricsItemBinding
 import dev.brahmkshatriya.echo.extensions.ExtensionUtils.isClient
 import dev.brahmkshatriya.echo.ui.common.GridAdapter
 import dev.brahmkshatriya.echo.ui.common.UiViewModel
@@ -40,7 +38,6 @@ import dev.brahmkshatriya.echo.utils.ContextUtils.observe
 import dev.brahmkshatriya.echo.utils.image.ImageUtils.loadAsCircle
 import dev.brahmkshatriya.echo.utils.ui.AnimationUtils.setupTransition
 import dev.brahmkshatriya.echo.utils.ui.AutoClearedValue.Companion.autoCleared
-import dev.brahmkshatriya.echo.utils.ui.FastScrollerHelper
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -93,17 +90,21 @@ class LyricsFragment : Fragment() {
             lyricAdapter.updateCurrent(currentIndex)
             if (!shouldAutoScroll) return
             binding.appBarLayout.setExpanded(false)
-            slideDown()
-            if (currentIndex < 0) return
-            val smoothScroller = CenterSmoothScroller(requireContext())
-            smoothScroller.targetPosition = currentIndex
-            layoutManager.startSmoothScroll(smoothScroller)
+            if (currentIndex < 0 || currentIndex >= lyricAdapter.itemCount) return
+            if (currentIndex == 0) {
+                layoutManager.scrollToPositionWithOffset(0, 0)
+            } else {
+                val smoothScroller = CenterSmoothScroller(requireContext())
+                smoothScroller.targetPosition = currentIndex
+                layoutManager.startSmoothScroll(smoothScroller)
+            }
         }
     }
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         setupTransition(view, false, axis = MaterialSharedAxis.Y)
-        FastScrollerHelper.applyTo(binding.lyricsRecyclerView)
+        binding.lyricsRecyclerView.setPadding(0, 16.dpToPx(), 0, (resources.displayMetrics.heightPixels * 0.5f).toInt())
+        binding.lyricsRecyclerView.clipToPadding = false
         ViewCompat.setOnApplyWindowInsetsListener(binding.root) { _, _ -> CONSUMED }
         observe(uiViewModel.moreSheetState) {
             binding.root.keepScreenOn = it == BottomSheetBehavior.STATE_EXPANDED
@@ -200,12 +201,18 @@ class LyricsFragment : Fragment() {
 
             }
             val lyricsItem = (state as? LyricsViewModel.State.Loaded)?.result?.getOrNull()
-            binding.lyricsItem.bind(lyricsItem)
+            // binding.lyricsItem.bind(lyricsItem)
             currentLyricsPos = -1
             currentLyrics = lyricsItem?.lyrics
             val list = when (val lyrics = currentLyrics) {
                 is Lyrics.Simple -> listOf(Lyrics.Item(lyrics.text, 0, 0))
-                is Lyrics.Timed -> lyrics.list
+                is Lyrics.Timed -> {
+                    val first = lyrics.list.firstOrNull()
+                    if (first != null && first.startTime > 2000) {
+                        listOf(Lyrics.Item("♪", 0, first.startTime)) + lyrics.list
+                    } else lyrics.list
+                }
+
                 is Lyrics.WordByWord -> lyrics.list.flatten()
                 null -> emptyList()
             }
@@ -215,6 +222,7 @@ class LyricsFragment : Fragment() {
         observe(playerVM.progress) { updateLyrics(it.first) }
     }
 
+    /*
     fun ItemLyricsItemBinding.bind(lyrics: Lyrics?) = root.run {
         if (lyrics == null) {
             isVisible = false
@@ -225,25 +233,20 @@ class LyricsFragment : Fragment() {
         setSubtitle(lyrics.subtitle)
         setBackgroundResource(R.color.amoled_bg)
     }
+    */
+
+    private fun Int.dpToPx() = (this * resources.displayMetrics.density).toInt()
 
     class CenterSmoothScroller(context: Context) : LinearSmoothScroller(context) {
         override fun calculateDtToFit(
             viewStart: Int, viewEnd: Int, boxStart: Int, boxEnd: Int, snapPreference: Int,
         ): Int {
-            val midPoint = boxEnd / 2
-            val targetMidPoint = ((viewEnd - viewStart) / 2) + viewStart
-            return midPoint - targetMidPoint
+            val targetOffset = (boxEnd * 0.30f).toInt()
+            return targetOffset - viewStart
         }
 
         override fun getVerticalSnapPreference() = SNAP_TO_START
         override fun calculateTimeForDeceleration(dx: Int) = 650
     }
 
-    @SuppressLint("WrongConstant")
-    private fun slideDown() {
-        val params = binding.lyricsItem.root.layoutParams as CoordinatorLayout.LayoutParams
-        val behavior = params.behavior as HideViewOnScrollBehavior
-        behavior.setViewEdge(1)
-        behavior.slideOut(binding.lyricsItem.root)
-    }
 }

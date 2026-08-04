@@ -1,15 +1,22 @@
 package dev.brahmkshatriya.echo.playback.renderer
 
 import android.content.Context
+import androidx.annotation.OptIn
 import androidx.media3.common.audio.SonicAudioProcessor
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.audio.DefaultAudioSink
 import androidx.media3.exoplayer.audio.SilenceSkippingAudioProcessor
 
-@androidx.annotation.OptIn(UnstableApi::class)
+/**
+ * Custom RenderersFactory configuring ExoPlayer's DefaultAudioSink.
+ * Audio Offload support (MP3, AAC, and device-supported FLAC) is handled dynamically
+ * via TrackSelectionParameters configured in PlayerService.
+ */
+@OptIn(UnstableApi::class)
 class RenderersFactory(
-    context: Context
+    context: Context,
+    private val audioEffectsProcessor: AudioEffectsProcessor,
 ) : DefaultRenderersFactory(context) {
 
     override fun buildAudioSink(
@@ -19,7 +26,7 @@ class RenderersFactory(
     ) = run {
         val silenceSkippingAudioProcessor = SilenceSkippingAudioProcessor(
             2_000_000,
-            (20_000 / 2_000_000).toFloat(),
+            20_000f / 2_000_000f,
             2_000_000,
             0,
             256,
@@ -27,10 +34,11 @@ class RenderersFactory(
 
         DefaultAudioSink.Builder(context)
             .setEnableFloatOutput(enableFloatOutput)
-            .setEnableAudioTrackPlaybackParams(enableAudioTrackPlaybackParams)
             .setAudioProcessorChain(
                 DefaultAudioSink.DefaultAudioProcessorChain(
-                    emptyArray(), silenceSkippingAudioProcessor, SonicAudioProcessor()
+                    arrayOf(audioEffectsProcessor),
+                    silenceSkippingAudioProcessor,
+                    SonicAudioProcessor()
                 )
             )
             .build()

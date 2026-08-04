@@ -4,11 +4,16 @@ import dev.brahmkshatriya.echo.download.DownloadWorker
 import dev.brahmkshatriya.echo.download.Downloader
 import dev.brahmkshatriya.echo.download.db.DownloadDatabase
 import dev.brahmkshatriya.echo.extensions.ExtensionLoader
+import dev.brahmkshatriya.echo.history.HistoryRepository
+import dev.brahmkshatriya.echo.history.db.HistoryDatabase
+import androidx.media3.common.MediaItem
 import dev.brahmkshatriya.echo.playback.PlayerService
 import dev.brahmkshatriya.echo.playback.PlayerState
+import kotlinx.coroutines.flow.MutableStateFlow
 import dev.brahmkshatriya.echo.ui.common.SnackBarHandler
 import dev.brahmkshatriya.echo.ui.common.UiViewModel
 import dev.brahmkshatriya.echo.ui.download.DownloadViewModel
+import dev.brahmkshatriya.echo.ui.history.HistoryViewModel
 import dev.brahmkshatriya.echo.ui.extensions.ExtensionInfoViewModel
 import dev.brahmkshatriya.echo.ui.extensions.ExtensionsViewModel
 import dev.brahmkshatriya.echo.ui.extensions.add.AddViewModel
@@ -25,6 +30,7 @@ import dev.brahmkshatriya.echo.ui.playlist.delete.DeletePlaylistViewModel
 import dev.brahmkshatriya.echo.ui.playlist.edit.EditPlaylistViewModel
 import dev.brahmkshatriya.echo.ui.playlist.save.SaveToPlaylistViewModel
 import dev.brahmkshatriya.echo.utils.ContextUtils.getSettings
+import dev.brahmkshatriya.echo.utils.HealthMonitor
 import org.koin.android.ext.koin.androidApplication
 import org.koin.androidx.workmanager.dsl.workerOf
 import org.koin.core.module.dsl.singleOf
@@ -35,6 +41,7 @@ object DI {
 
     private val baseModule = module {
         single { androidApplication().getSettings() }
+        single { HealthMonitor(androidApplication()) }
         singleOf(::App)
     }
 
@@ -50,10 +57,17 @@ object DI {
         workerOf(::DownloadWorker)
     }
 
+    private val historyModule = module {
+        singleOf(HistoryDatabase::create)
+        single { get<HistoryDatabase>().historyDao() }
+        singleOf(::HistoryRepository)
+    }
+
     private val playerModule = module {
         includes(extensionModule)
         singleOf(PlayerService::getCache)
         single { PlayerState() }
+        single { MutableStateFlow<List<MediaItem>>(emptyList()) }
     }
 
     private val uiModules = module {
@@ -80,6 +94,7 @@ object DI {
         viewModelOf(::EditPlaylistViewModel)
 
         viewModelOf(::DownloadViewModel)
+        viewModelOf(::HistoryViewModel)
     }
 
     val appModule = module {
@@ -87,6 +102,7 @@ object DI {
         includes(extensionModule)
         includes(playerModule)
         includes(downloadModule)
+        includes(historyModule)
         includes(uiModules)
     }
 }

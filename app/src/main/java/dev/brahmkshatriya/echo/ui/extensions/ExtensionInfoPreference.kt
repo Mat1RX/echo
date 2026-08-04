@@ -1,6 +1,9 @@
 package dev.brahmkshatriya.echo.ui.extensions
 
 import android.annotation.SuppressLint
+import android.app.UiModeManager
+import android.content.pm.PackageManager
+import android.content.res.Configuration
 import android.text.SpannableString
 import android.text.Spanned
 import android.text.method.LinkMovementMethod
@@ -18,6 +21,7 @@ import dev.brahmkshatriya.echo.extensions.db.models.UserEntity.Companion.toEntit
 import dev.brahmkshatriya.echo.ui.common.FragmentUtils.openFragment
 import dev.brahmkshatriya.echo.ui.extensions.ExtensionInfoFragment.Companion.openLink
 import dev.brahmkshatriya.echo.ui.extensions.login.LoginFragment
+import dev.brahmkshatriya.echo.ui.settings.TvPairingFragment
 import dev.brahmkshatriya.echo.ui.extensions.login.LoginUserListBottomSheet
 import dev.brahmkshatriya.echo.ui.extensions.login.LoginUserListViewModel
 import dev.brahmkshatriya.echo.utils.ContextUtils.observe
@@ -125,6 +129,16 @@ class ExtensionInfoPreference(
                 binding.incognito.setOnClickListener {
                     ext ?: return@setOnClickListener
                     viewModel.setLoginUser(CurrentUser(ext.type, ext.id, null))
+                }
+
+                val isTV = context?.let {
+                    (it.getSystemService(android.content.Context.UI_MODE_SERVICE) as UiModeManager)
+                        .currentModeType == Configuration.UI_MODE_TYPE_TELEVISION ||
+                        it.packageManager.hasSystemFeature(PackageManager.FEATURE_LEANBACK)
+                } ?: false
+                binding.linkTv.isVisible = false
+                binding.linkTv.setOnClickListener {
+                    requireActivity().openFragment<TvPairingFragment>()
                 }
 
                 binding.currentUserName.text = user?.name

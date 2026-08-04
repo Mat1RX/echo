@@ -12,6 +12,7 @@ import dev.brahmkshatriya.echo.common.models.TrackDetails
 import dev.brahmkshatriya.echo.extensions.ExtensionLoader
 import dev.brahmkshatriya.echo.extensions.ExtensionUtils.getExtension
 import dev.brahmkshatriya.echo.extensions.ExtensionUtils.runIf
+import dev.brahmkshatriya.echo.history.HistoryRepository
 import dev.brahmkshatriya.echo.playback.MediaItemUtils.context
 import dev.brahmkshatriya.echo.playback.MediaItemUtils.extensionId
 import dev.brahmkshatriya.echo.playback.MediaItemUtils.track
@@ -37,7 +38,8 @@ class TrackingListener(
     private val scope: CoroutineScope,
     extensions: ExtensionLoader,
     private val currentFlow: MutableStateFlow<PlayerState.Current?>,
-    private val throwableFlow: MutableSharedFlow<Throwable>
+    private val throwableFlow: MutableSharedFlow<Throwable>,
+    private val historyRepository: HistoryRepository,
 ) : Player.Listener {
 
     private val musicList = extensions.music
@@ -46,11 +48,12 @@ class TrackingListener(
     private var current: MediaItem? = null
     private var previousId: String? = null
 
-    private suspend fun getDetails() = withContext(Dispatchers.Main) {
-        current?.let { curr ->
-            val (pos, total) = player.currentPosition to player.duration.takeIf { it != C.TIME_UNSET }
-            TrackDetails(curr.extensionId, curr.track, curr.context, pos, total)
+    private suspend fun getDetails(): TrackDetails? {
+        val item = current ?: return null
+        val (pos, total) = withContext(Dispatchers.Main) {
+            player.currentPosition to player.duration.takeIf { it != C.TIME_UNSET }
         }
+        return TrackDetails(item.extensionId, item.track, item.context, pos, total)
     }
 
     private fun trackMedia(
@@ -72,6 +75,7 @@ class TrackingListener(
 
     private val mutex = Mutex()
     private val timers = mutableMapOf<String, PauseTimer>()
+    private var historyTimer: PauseTimer? = null
     private fun onTrackChanged(mediaItem: MediaItem?) {
         previousId = current?.extensionId
         current = mediaItem
@@ -79,6 +83,8 @@ class TrackingListener(
             mutex.withLock {
                 timers.forEach { (_, timer) -> timer.pause() }
                 timers.clear()
+                historyTimer?.pause()
+                historyTimer = null
             }
             trackMedia { extension, details ->
                 onTrackChanged(details)
@@ -90,6 +96,22 @@ class TrackingListener(
                         scope.launch {
                             extension.runIf<TrackerMarkClient>(throwableFlow) {
                                 onMarkAsPlayed(details)
+                            }
+                        }
+                    }
+                }
+            }
+            if (mediaItem != null) {
+                val capturedItem = mediaItem
+                mutex.withLock {
+                    historyTimer = PauseTimer(scope, 30_000L) {
+                        scope.launch {
+                            runCatching {
+                                historyRepository.recordTrack(
+                                    capturedItem.extensionId,
+                                    capturedItem.track,
+                                    capturedItem.context
+                                )
                             }
                         }
                     }
@@ -140,6 +162,7 @@ class TrackingListener(
                         if (isPlaying) timer.resume()
                         else timer.pause()
                     }
+                    if (isPlaying) historyTimer?.resume() else historyTimer?.pause()
                 }
                 trackMedia { _, details ->
                     onPlayingStateChanged(details, isPlaying)

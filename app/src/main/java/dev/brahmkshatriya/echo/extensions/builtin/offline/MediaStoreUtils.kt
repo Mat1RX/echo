@@ -7,6 +7,7 @@ import android.content.pm.PackageManager
 import android.database.Cursor
 import android.net.Uri
 import android.os.Build
+import android.os.Environment
 import android.provider.MediaStore
 import android.util.Log
 import androidx.annotation.RequiresApi
@@ -15,6 +16,7 @@ import androidx.core.database.getLongOrNull
 import androidx.core.database.getStringOrNull
 import androidx.core.net.toUri
 import dev.brahmkshatriya.echo.R
+import dev.brahmkshatriya.echo.common.helpers.ClientException
 import dev.brahmkshatriya.echo.common.models.Album
 import dev.brahmkshatriya.echo.common.models.Artist
 import dev.brahmkshatriya.echo.common.models.Date.Companion.toYearDate
@@ -590,18 +592,61 @@ object MediaStoreUtils {
     private fun hasScopedStorage(): Boolean =
         Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
 
+    @Suppress("DEPRECATION")
     fun Context.createPlaylist(title: String): Long? {
-        val values = ContentValues()
-        values.put(
-            @Suppress("DEPRECATION") MediaStore.Audio.Playlists.NAME,
-            title
-        )
-        return contentResolver.insert(
-            @Suppress("DEPRECATION")
-            MediaStore.Audio.Playlists.EXTERNAL_CONTENT_URI,
-            values
-        )?.lastPathSegment?.toLong()
+        val playlistsUri = MediaStore.Audio.Playlists.EXTERNAL_CONTENT_URI
+
+        // (2) Reuse an existing MediaStore playlist row with this name, queried DIRECTLY here rather
+        // than via the caller's playlistsFinal (whose backing Playlists query is degraded on Android
+        // 16 and misses the row). This recovers an orphan the list query didn't surface and stops the
+        // re-create loop that accumulates duplicate/orphaned "Liked (N)" entries and eventually
+        // saturates MediaProvider's buildUniqueFile dedupe → the "Failed to build unique file" throw.
+        runCatching {
+            contentResolver.query(
+                playlistsUri,
+                arrayOf(MediaStore.Audio.Playlists._ID),
+                "${MediaStore.Audio.Playlists.NAME} = ?",
+                arrayOf(title),
+                null
+            )?.use { cursor ->
+                if (cursor.moveToFirst())
+                    return cursor.getLong(cursor.getColumnIndexOrThrow(MediaStore.Audio.Playlists._ID))
+            }
+        }.onFailure { Log.e(TAG, "createPlaylist: lookup for existing \"$title\" failed", it) }
+
+        // (3) Complete ContentValues so MediaProvider doesn't have to derive an extensionless
+        // _display_name (a contributing factor to the file-build failure). RELATIVE_PATH is API 29+.
+        val values = ContentValues().apply {
+            put(MediaStore.Audio.Playlists.NAME, title)
+            put(MediaStore.MediaColumns.DISPLAY_NAME, "$title.m3u")
+            put(MediaStore.MediaColumns.MIME_TYPE, "audio/mpegurl")
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q)
+                put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_MUSIC)
+        }
+
+        // (1) The deprecated Playlists insert can throw (IllegalStateException "Failed to build unique
+        // file" on orphaned/collided state, plus other MediaProvider failures). Catch broadly and
+        // return null so getLikedPlaylist's `id ?: return@run null` degrades gracefully instead of the
+        // throw propagating up through getAllSongs → getLibrary and aborting the whole library load.
+        return runCatching {
+            contentResolver.insert(playlistsUri, values)?.lastPathSegment?.toLong()
+        }.onFailure { Log.e(TAG, "createPlaylist: insert for \"$title\" failed", it) }.getOrNull()
     }
+
+    // Scoped storage (API 29+) lets us modify only MediaStore playlists our app OWNS. When getLikedPlaylist
+    // (or a user playlist op) resolves a playlist another app created, the deprecated Playlists/Members
+    // insert/update/delete is denied with SecurityException ("…has no access to …/playlists/<id>"). There is
+    // no user-grant recovery for another app's playlist membership (RecoverableSecurityException — a subclass,
+    // so this catch covers it too — applies to media FILES, not playlist rows), so we DECLINE: convert to a
+    // handled ClientException.NotSupported. That surfaces a clear message to the user and, being a handled
+    // client exception, is NOT reported to the crash reporter — turning a noisy non-fatal into a graceful no-op.
+    // createPlaylist is already covered by its own runCatching, so it is not routed through here.
+    private inline fun <T> guardPlaylistWrite(block: () -> T): T =
+        try {
+            block()
+        } catch (_: SecurityException) {
+            throw ClientException.NotSupported("Modifying a playlist created by another app")
+        }
 
     fun Context.editPlaylist(id: Long, title: String) {
         val values = ContentValues()
@@ -609,23 +654,27 @@ object MediaStoreUtils {
             @Suppress("DEPRECATION") MediaStore.Audio.Playlists.NAME,
             title
         )
-        contentResolver.update(
-            @Suppress("DEPRECATION")
-            MediaStore.Audio.Playlists.EXTERNAL_CONTENT_URI,
-            values,
-            @Suppress("DEPRECATION")
-            MediaStore.Audio.Playlists._ID + "=?",
-            arrayOf(id.toString())
-        )
+        guardPlaylistWrite {
+            contentResolver.update(
+                @Suppress("DEPRECATION")
+                MediaStore.Audio.Playlists.EXTERNAL_CONTENT_URI,
+                values,
+                @Suppress("DEPRECATION")
+                MediaStore.Audio.Playlists._ID + "=?",
+                arrayOf(id.toString())
+            )
+        }
     }
 
     fun Context.deletePlaylist(id: Long) {
-        contentResolver.delete(
-            @Suppress("DEPRECATION")
-            MediaStore.Audio.Playlists.EXTERNAL_CONTENT_URI,
-            @Suppress("DEPRECATION") MediaStore.Audio.Playlists._ID + "=?",
-            arrayOf(id.toString())
-        )
+        guardPlaylistWrite {
+            contentResolver.delete(
+                @Suppress("DEPRECATION")
+                MediaStore.Audio.Playlists.EXTERNAL_CONTENT_URI,
+                @Suppress("DEPRECATION") MediaStore.Audio.Playlists._ID + "=?",
+                arrayOf(id.toString())
+            )
+        }
     }
 
     fun Context.addSongToPlaylist(playlistId: Long, songId: Long, index: Int) {
@@ -638,22 +687,28 @@ object MediaStoreUtils {
             @Suppress("DEPRECATION") MediaStore.Audio.Playlists.Members.AUDIO_ID,
             songId
         )
-        contentResolver.insert(
-            @Suppress("DEPRECATION")
-            MediaStore.Audio.Playlists.Members.getContentUri("external", playlistId),
-            values
-        )
+        guardPlaylistWrite {
+            contentResolver.insert(
+                @Suppress("DEPRECATION")
+                MediaStore.Audio.Playlists.Members.getContentUri("external", playlistId),
+                values
+            )
+        }
     }
 
     fun Context.removeSongFromPlaylist(playlistId: Long, index: Int) {
-        contentResolver.delete(
-            @Suppress("DEPRECATION")
-            MediaStore.Audio.Playlists.Members.getContentUri("external", playlistId),
-            @Suppress("DEPRECATION") MediaStore.Audio.Playlists.Members.PLAY_ORDER + "=?",
-            arrayOf((index + 1).toString())
-        )
+        guardPlaylistWrite {
+            contentResolver.delete(
+                @Suppress("DEPRECATION")
+                MediaStore.Audio.Playlists.Members.getContentUri("external", playlistId),
+                @Suppress("DEPRECATION") MediaStore.Audio.Playlists.Members.PLAY_ORDER + "=?",
+                arrayOf((index + 1).toString())
+            )
+        }
     }
 
+    // Covered transitively: both calls are guarded, so a SecurityException on a foreign playlist throws the
+    // handled ClientException from the first (remove) step before anything changes.
     fun Context.moveSongInPlaylist(playlistId: Long, song: Long, from: Int, to: Int) {
         removeSongFromPlaylist(playlistId, from)
         addSongToPlaylist(playlistId, song, to)

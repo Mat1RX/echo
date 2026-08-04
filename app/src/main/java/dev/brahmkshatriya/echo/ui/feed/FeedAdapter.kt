@@ -1,13 +1,23 @@
 package dev.brahmkshatriya.echo.ui.feed
 
+import android.app.Activity
+import android.app.UiModeManager
+import android.content.Context
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.content.res.Configuration
+import android.speech.RecognizerIntent
 import android.view.LayoutInflater
 import android.view.ViewGroup
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.view.isVisible
 import androidx.fragment.app.Fragment
 import androidx.paging.LoadState
 import androidx.recyclerview.widget.DiffUtil
 import androidx.recyclerview.widget.ItemTouchHelper
 import androidx.recyclerview.widget.RecyclerView
+import dev.brahmkshatriya.echo.R
+import dev.brahmkshatriya.echo.common.models.Feed
 import dev.brahmkshatriya.echo.common.models.Track
 import dev.brahmkshatriya.echo.databinding.ItemLoadingBinding
 import dev.brahmkshatriya.echo.playback.PlayerState
@@ -42,6 +52,9 @@ class FeedAdapter(
     private val viewModel: FeedData,
     private val listener: FeedClickListener,
     private val takeFullScreen: Boolean = false,
+    // Resolved once at construction (see getFeedAdapter), never per getSpanSize call.
+    private val isTV: Boolean = false,
+    private val phoneSingleColumn: Boolean = false,
 ) : ScrollAnimPagingAdapter<FeedType, FeedViewHolder<*>>(DiffCallback), GridAdapter {
 
     object DiffCallback : DiffUtil.ItemCallback<FeedType>() {
@@ -152,13 +165,34 @@ class FeedAdapter(
         }
     }.flatten()
 
-    fun withLoading(fragment: Fragment, vararg before: GridAdapter): GridAdapter.Concat {
+    fun withLoading(fragment: Fragment, vararg before: GridAdapter, initialButtons: Boolean = false, onCreatePlaylistClick: (() -> Unit)? = null, onEditPlaylistClick: (() -> Unit)? = null): GridAdapter.Concat {
         val tabs = TabsAdapter<FeedTab>({ tab.title }) { view, index, tab ->
             listener.onTabSelected(view, tab.feedId, tab.extensionId, index)
         }
         fragment.observe(viewModel.tabsFlow) { tabs.data = it }
         fragment.observe(viewModel.selectedTabIndexFlow) { tabs.selected = it }
-        val buttons = ButtonsAdapter(viewModel, listener, ::getAllTracks)
+        var buttonsAdapter: ButtonsAdapter? = null
+        val speechLauncher = fragment.registerForActivityResult(
+            ActivityResultContracts.StartActivityForResult()
+        ) { result ->
+            if (result.resultCode == Activity.RESULT_OK) {
+                result.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)
+                    ?.firstOrNull()?.let { text ->
+                        viewModel.searchToggled = true
+                        viewModel.searchQuery = text
+                        buttonsAdapter?.notifyItemChanged(0)
+                        viewModel.onSearchClicked()
+                    }
+            }
+        }
+        val buttons = ButtonsAdapter(viewModel, listener, ::getAllTracks, onCreatePlaylistClick, onEditPlaylistClick) {
+            val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+                putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+            }
+            runCatching { speechLauncher.launch(intent) }
+        }
+        buttonsAdapter = buttons
+        if (initialButtons) buttons.buttons = FeedData.Buttons("", "", Feed.Buttons(showPlayAndShuffle = true))
         fragment.observe(viewModel.buttonsFlow) {
             buttons.buttons = it
             isPlayButtonShown = it?.buttons?.showPlayAndShuffle == true
@@ -174,8 +208,12 @@ class FeedAdapter(
                 shouldShowEmpty && itemCount == 0 && loadStates.append is LoadState.NotLoading
             empty.loadState = if (isEmpty) LoadState.Loading else LoadState.NotLoading(false)
         }
+        var hasEverLoaded = false
         addLoadStateListener { loadStates ->
-            header.loadState = loadStates.refresh
+            if (loadStates.refresh is LoadState.NotLoading) hasEverLoaded = true
+            header.loadState = if (hasEverLoaded && loadStates.refresh is LoadState.Loading)
+                LoadState.NotLoading(false)
+            else loadStates.refresh
             footer.loadState = loadStates.append
         }
         return GridAdapter.Concat(*before, tabs, buttons, header, empty, this, footer)
@@ -185,9 +223,25 @@ class FeedAdapter(
     override fun getSpanSize(position: Int, width: Int, count: Int) =
         when (FeedType.Enum.entries[getItemViewType(position)]) {
             Header, HorizontalList -> count
-            Category, Media, Video -> if (takeFullScreen) count else 2.coerceAtMost(count)
-            CategoryGrid, MediaGrid, VideoHorizontal -> 1
+            Category, Media, Video -> when {
+                takeFullScreen -> count                  // checked first: full width on phone AND TV
+                // TV: pin to 2 columns regardless of feed width. span = count/2 yields exactly 2 tiles per
+                // row for any even count (configureGridLayout forces even), same idiom as CategoryGrid below.
+                // Was 2.coerceAtMost(count) = count/2-ish columns, which drifted 1<->2 as the width-derived
+                // spanCount crossed the floor/even boundary. count==1 (feed too narrow) degrades to 1 column.
+                isTV -> (count / 2).coerceAtLeast(1)
+                phoneSingleColumn -> count               // sw<600dp: full width -> 1 column
+                else -> 2.coerceAtMost(count)            // sw>=600dp tablet: today's behavior verbatim
+            }
+            // Pin category-grid previews to 2 columns regardless of device width: span = count/2
+            // yields exactly 2 tiles per row for any even count (Home/Search use even=true), so the
+            // 6-card preview is always 3 rows of 2 on every device. coerceAtLeast(1) guards count==1.
+            CategoryGrid -> (count / 2).coerceAtLeast(1)
+            MediaGrid, VideoHorizontal -> 1
         }
+
+    override fun isSectionHeader(position: Int) =
+        runCatching { getItem(position) }.getOrNull()?.type == Header
 
     private fun clearState() {
         viewModel.layoutManagerStates.clear()
@@ -229,7 +283,14 @@ class FeedAdapter(
             takeFullScreen: Boolean = false,
         ): FeedAdapter {
             val playerViewModel by activityViewModel<PlayerViewModel>()
-            val adapter = FeedAdapter(viewModel, listener, takeFullScreen)
+            val context = requireContext()
+            val isTV = (context.getSystemService(Context.UI_MODE_SERVICE) as UiModeManager)
+                .currentModeType == Configuration.UI_MODE_TYPE_TELEVISION ||
+                context.packageManager.hasSystemFeature(PackageManager.FEATURE_LEANBACK)
+            val phoneSingleColumn = context.resources.getBoolean(R.bool.feed_phone_single_column)
+            val adapter = FeedAdapter(
+                viewModel, listener, takeFullScreen, isTV, phoneSingleColumn
+            )
             observe(viewModel.pagingFlow) {
                 adapter.saveState()
                 adapter.submitData(it)

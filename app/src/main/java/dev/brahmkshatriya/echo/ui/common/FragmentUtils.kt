@@ -20,11 +20,15 @@ import dev.brahmkshatriya.echo.common.models.Artist
 import dev.brahmkshatriya.echo.common.models.EchoMediaItem
 import dev.brahmkshatriya.echo.common.models.Playlist
 import dev.brahmkshatriya.echo.common.models.Track
+import dev.brahmkshatriya.echo.playback.PlayerCommands
+import dev.brahmkshatriya.echo.playback.PlayerService
+import dev.brahmkshatriya.echo.playback.ResumptionUtils.hasSavedQueue
 import dev.brahmkshatriya.echo.ui.common.SnackBarHandler.Companion.createSnack
 import dev.brahmkshatriya.echo.ui.download.DownloadFragment
 import dev.brahmkshatriya.echo.ui.extensions.ExtensionsViewModel
 import dev.brahmkshatriya.echo.ui.extensions.WebViewUtils.onWebViewIntent
 import dev.brahmkshatriya.echo.ui.media.MediaFragment
+import dev.brahmkshatriya.echo.ui.settings.TvPairingFragment
 import org.koin.androidx.viewmodel.ext.android.viewModel
 
 object FragmentUtils {
@@ -32,7 +36,7 @@ object FragmentUtils {
         view: View? = null, bundle: Bundle? = null,
     ) {
         val viewModel by activityViewModels<UiViewModel>()
-        openFragment<T>(id, parentFragmentManager, viewModel, view, bundle)
+        openFragment<T>(id, parentFragmentManager, viewModel, view, bundle, caller = this)
     }
 
     inline fun <reified T : Fragment> openFragment(
@@ -41,13 +45,16 @@ object FragmentUtils {
         viewModel: UiViewModel,
         view: View? = null,
         bundle: Bundle? = null,
+        caller: Fragment? = null,
     ) {
         viewModel.collapsePlayer()
         manager.commit {
             setReorderingAllowed(true)
             addToBackStack(null)
             val fragment = createFragment<T>(bundle)
-            val old = manager.findFragmentById(cont)
+            // Use the calling fragment directly — findFragmentById is unreliable when multiple
+            // fragments share the same container (e.g. the tab hide/show pattern in MainFragment).
+            val old = caller ?: manager.findFragmentById(cont)
             if (old != null) hide(old)
             add(cont, fragment)
             setPrimaryNavigationFragment(fragment)
@@ -83,6 +90,19 @@ object FragmentUtils {
         uiViewModel: UiViewModel,
     ) {
         addOnNewIntentListener { onIntent(uiViewModel, it) }
+        addOnNewIntentListener {
+            val isFromGearhead = try {
+                referrer?.host == "com.google.android.projection.gearhead"
+            } catch (e: Exception) {
+                false
+            }
+            // Existence only (decides whether to expand the player) — cheap stat, NOT a main-thread decode
+            // of the saved queue, which ANRs on a large queue + slow device (same fix as the button gate).
+            if (isFromGearhead && hasSavedQueue(this@setupIntents)) {
+                uiViewModel.changePlayerState(STATE_EXPANDED)
+                uiViewModel.changeMoreState(STATE_COLLAPSED)
+            }
+        }
         onIntent(uiViewModel, intent)
     }
 
@@ -91,7 +111,21 @@ object FragmentUtils {
         intent ?: return
         val fromNotif = intent.hasExtra("fromNotification")
         if (fromNotif) uiViewModel.run {
-            if (playerSheetState.value == STATE_HIDDEN) return@run
+            if (playerSheetState.value == STATE_HIDDEN) {
+                // Existence only (decides whether to send resumeCommand) — cheap stat, not a main-thread decode.
+                if (hasSavedQueue(this@onIntent)) {
+                    PlayerService.getController(application) { controller ->
+                        controller.sendCustomCommand(
+                            PlayerCommands.resumeCommand,
+                            Bundle.EMPTY
+                        )
+                        controller.release()
+                    }
+                    changePlayerState(STATE_EXPANDED)
+                    changeMoreState(STATE_COLLAPSED)
+                }
+                return
+            }
             changePlayerState(STATE_EXPANDED)
             changeMoreState(STATE_COLLAPSED)
             return
@@ -109,7 +143,14 @@ object FragmentUtils {
         }
         val uri = intent.data
         when (uri?.scheme) {
-            "echo" -> runCatching { openItemFragmentFromUri(uri) }
+            "echo" -> {
+                if (uri.host == "pair") {
+                    val code = uri.getQueryParameter("code").orEmpty()
+                    openFragment<TvPairingFragment>(null, TvPairingFragment.getBundle(code))
+                } else {
+                    runCatching { openItemFragmentFromUri(uri) }
+                }
+            }
             "file" -> {
                 val viewModel by viewModel<ExtensionsViewModel>()
                 viewModel.installWithPrompt(listOf(uri.toFile()))

@@ -14,6 +14,7 @@ import dev.brahmkshatriya.echo.extensions.ExtensionUtils.getExtensionFlow
 import dev.brahmkshatriya.echo.extensions.db.models.UserEntity.Companion.toCurrentUser
 import dev.brahmkshatriya.echo.extensions.db.models.UserEntity.Companion.toEntity
 import dev.brahmkshatriya.echo.extensions.exceptions.AppException.Companion.toAppException
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted.Companion.Eagerly
@@ -40,6 +41,7 @@ class LoginViewModel(
         data object Selector : FragmentType()
         data object WebView : FragmentType()
         data class CustomInput(val index: Int?) : FragmentType()
+        data object SmartLogin : FragmentType()
     }
 
     private suspend fun loginNotSupported(extName: String?) {
@@ -58,6 +60,7 @@ class LoginViewModel(
         result: Result<List<User>>
     ) {
         val users = result.getOrElse {
+            if (it is CancellationException) throw it
             app.throwFlow.emit(it)
             loading.value = false
             loadingOver.emit(Unit)
@@ -73,6 +76,15 @@ class LoginViewModel(
         }
         loading.value = false
         loadingOver.emit(Unit)
+    }
+
+    fun onSmartLoginComplete(arl: String) = viewModelScope.launch {
+        loading.value = true
+        val extension = extension.first { it != null }!!
+        val users = extension.getAs<LoginClient.CustomInput, List<User>> {
+            onLogin("manual", mapOf("arl" to arl))
+        }
+        afterLogin(users)
     }
 
     fun onWebViewStop(

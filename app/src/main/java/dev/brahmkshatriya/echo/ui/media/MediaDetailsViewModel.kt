@@ -18,12 +18,14 @@ import dev.brahmkshatriya.echo.common.models.EchoMediaItem
 import dev.brahmkshatriya.echo.common.models.Feed
 import dev.brahmkshatriya.echo.common.models.Feed.Companion.toFeed
 import dev.brahmkshatriya.echo.common.models.Message
+import dev.brahmkshatriya.echo.common.models.Playlist
 import dev.brahmkshatriya.echo.common.models.Shelf
 import dev.brahmkshatriya.echo.common.models.Track
 import dev.brahmkshatriya.echo.di.App
 import dev.brahmkshatriya.echo.download.Downloader
 import dev.brahmkshatriya.echo.extensions.ExtensionUtils.getIf
 import dev.brahmkshatriya.echo.extensions.MediaState
+import dev.brahmkshatriya.echo.extensions.cache.Cached.bustPlaylistTracksCache
 import dev.brahmkshatriya.echo.extensions.cache.Cached.getFeed
 import dev.brahmkshatriya.echo.extensions.cache.Cached.getTracks
 import dev.brahmkshatriya.echo.extensions.cache.Cached.loadFeed
@@ -68,24 +70,18 @@ abstract class MediaDetailsViewModel(
         extensionFlow.value to result?.getOrNull()?.item
     }.stateIn(viewModelScope, Eagerly, null to null)
 
-    private fun trackFeed(item: EchoMediaItem, extension: Extension<*>) =
+    private fun trackFeed(item: EchoMediaItem, extension: Extension<*>) : Result<Feed<Shelf>>? =
         if (item is Track) runCatching {
-            PagedData.Concat(
+            PagedData.Concat<Shelf>(
                 PagedData.Single {
                     val album = item.album?.let { loadItem(extension, it).getOrNull() ?: it }
                     listOfNotNull(album?.toShelf())
                 },
                 PagedData.Single {
                     if (item.artists.isEmpty()) return@Single emptyList()
-                    listOf(
-                        Shelf.Lists.Items(
-                            item.id + "_artists",
-                            app.context.getString(R.string.artists),
-                            item.artists.map {
-                                loadItem(extension, it).getOrNull() ?: it
-                            },
-                        )
-                    )
+                    item.artists.map { artist ->
+                        (loadItem(extension, artist).getOrNull() ?: artist).toShelf()
+                    }
                 },
             ).toFeed(Feed.Buttons.EMPTY)
         } else null
@@ -95,8 +91,8 @@ abstract class MediaDetailsViewModel(
         if (!loadFeeds) return@transformLatest
         extension ?: return@transformLatest
         val item = item ?: cacheResultFlow.value?.getOrNull()?.item ?: return@transformLatest
-        val feed = trackFeed(item, extension)
-            ?: getTracks(app, extension.id, item).map { feed -> feed?.map { it.toShelf() } }
+        val feed : Result<Feed<Shelf>?> = trackFeed(item, extension)
+            ?: getTracks(app, extension.id, item).map { it?.map { t -> t.toShelf() } }
         emit(feed.map {
             it ?: return@map null
             FeedData.State(extension.id, item, it)
@@ -108,8 +104,8 @@ abstract class MediaDetailsViewModel(
         if (!loadFeeds) return@transformLatest
         extension ?: return@transformLatest
         item ?: return@transformLatest
-        val feed = trackFeed(item, extension)
-            ?: loadTracks(app, extension, item).map { feed -> feed?.map { it.toShelf() } }
+        val feed : Result<Feed<Shelf>?> = trackFeed(item, extension)
+            ?: loadTracks(app, extension, item).map { it?.map { t -> t.toShelf() } }
         emit(feed.map {
             it ?: return@map null
             FeedData.State(extension.id, item, it)
@@ -140,6 +136,14 @@ abstract class MediaDetailsViewModel(
     }.stateIn(viewModelScope, Eagerly, null)
 
     fun refresh() = viewModelScope.launch {
+        refreshFlow.emit(Unit)
+    }
+
+    // Force a fresh canonical re-fetch: bust the durable playlist-tracks entry (so loadTracks skips its
+    // 24h short-circuit) then refresh. Gated to pull-to-refresh + edit "reload" — NOT like/save/follow/hide,
+    // which call refresh() and must keep serving the cached tracks. No-op for non-playlist items.
+    fun refreshTracks() = viewModelScope.launch {
+        (getItem()?.second as? Playlist)?.let { bustPlaylistTracksCache(app, it.id) }
         refreshFlow.emit(Unit)
     }
 
@@ -205,7 +209,11 @@ abstract class MediaDetailsViewModel(
                     item.title
                 )
             }
-            val result = extension.getIf<LikeClient, Unit>(app.throwFlow) {
+            // R = Any? (not Unit): the return value is unused (only null-checked for success below), and
+            // an extension whose likeItem was built against a divergent signature can return a non-Unit
+            // value (e.g. a String) at runtime. Constraining R to Unit forced a `checkcast kotlin/Unit`
+            // on that value → fatal "String cannot be cast to Unit". Any? accepts whatever it returns.
+            val result = extension.getIf<LikeClient, Any?>(app.throwFlow) {
                 likeItem(item, like)
             }
             if (result != null) createMessage(app) {
@@ -225,7 +233,8 @@ abstract class MediaDetailsViewModel(
                     item.title
                 )
             }
-            val result = extension.getIf<HideClient, Unit>(app.throwFlow) {
+            // R = Any?, same crash-safety as like(): the result is only null-checked, never used.
+            val result = extension.getIf<HideClient, Any?>(app.throwFlow) {
                 hideItem(item, hide)
             }
             if (result != null) createMessage(app) {
@@ -246,7 +255,8 @@ abstract class MediaDetailsViewModel(
                     item.title
                 )
             }
-            val result = extension.getIf<FollowClient, Unit>(app.throwFlow) {
+            // R = Any?, same crash-safety as like(): the result is only null-checked, never used.
+            val result = extension.getIf<FollowClient, Any?>(app.throwFlow) {
                 followItem(item, follow)
             }
             if (result != null) createMessage(app) {
@@ -267,7 +277,8 @@ abstract class MediaDetailsViewModel(
                     item.title
                 )
             }
-            val result = extension.getIf<SaveClient, Unit>(app.throwFlow) {
+            // R = Any?, same crash-safety as like(): the result is only null-checked, never used.
+            val result = extension.getIf<SaveClient, Any?>(app.throwFlow) {
                 saveToLibrary(item, save)
             }
             if (result != null) createMessage(app) {

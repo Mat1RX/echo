@@ -1,4 +1,5 @@
 name: Handle Extension Issues
+
 on:
   issues:
     types: [opened]

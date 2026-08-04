@@ -1,8 +1,12 @@
+@file:Suppress("UNREACHABLE_CODE")
+
 package dev.brahmkshatriya.echo.ui.extensions.add
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import dev.brahmkshatriya.echo.R
 import dev.brahmkshatriya.echo.common.helpers.ContinuationCallback.Companion.await
+import dev.brahmkshatriya.echo.common.models.Message
 import dev.brahmkshatriya.echo.di.App
 import dev.brahmkshatriya.echo.extensions.ExtensionLoader
 import dev.brahmkshatriya.echo.extensions.exceptions.InvalidExtensionListException
@@ -10,6 +14,7 @@ import dev.brahmkshatriya.echo.ui.extensions.ExtensionsViewModel
 import dev.brahmkshatriya.echo.utils.AppUpdater.downloadUpdate
 import dev.brahmkshatriya.echo.utils.AppUpdater.getUpdateFileUrl
 import dev.brahmkshatriya.echo.utils.Serializer.toData
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
@@ -50,8 +55,9 @@ class AddViewModel(
             val request = Request.Builder()
                 .addHeader("Cookie", "preview=1")
                 .url(link).build()
-            client.newCall(request).await().body.string()
-                .toData<List<ExtensionAssetResponse>>().getOrThrow()
+            val body = client.newCall(request).await().body.string()
+            if (body.trimStart().startsWith("<")) throw Exception("URL returned an HTML page, not a valid extension list")
+            body.toData<List<ExtensionAssetResponse>>().getOrThrow()
         }
     }.getOrElse {
         throw InvalidExtensionListException(link, it)
@@ -84,6 +90,7 @@ class AddViewModel(
         }
 
         val list = runCatching { getExtensionList(actualLink, client) }.getOrElse {
+            if (it is CancellationException) throw it
             app.throwFlow.emit(it)
             null
         }
@@ -107,10 +114,22 @@ class AddViewModel(
         val files = selected.mapNotNull { item ->
             addingFlow.value = AddState.Downloading(item)
             val url = getUpdateFileUrl("", item.updateUrl, client).getOrElse {
-                app.throwFlow.emit(it)
-                null
-            } ?: return@mapNotNull null
+                if (it is CancellationException) throw it
+                app.throwFlow.emit(it)          // real error (network/parse) — already surfaced
+                return@mapNotNull null
+            }
+            if (url == null) {
+                // Success but no download URL. currentVersion is "" here, so a supported GitHub
+                // update_url always yields a URL — a null therefore means the source is unsupported/
+                // unusable (non-GitHub host, or empty update_url). Unlike the silent auto-check path,
+                // this is an EXPLICIT add, so surface why the item was skipped instead of dropping it.
+                app.messageFlow.emit(
+                    Message(app.context.getString(R.string.unsupported_update_source_for_x, item.name))
+                )
+                return@mapNotNull null
+            }
             downloadUpdate(app.context, url, client).getOrElse {
+                if (it is CancellationException) throw it
                 app.throwFlow.emit(it)
                 null
             }

@@ -7,26 +7,63 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DataSpec
 import androidx.media3.datasource.ResolvingDataSource.Resolver
 import dev.brahmkshatriya.echo.common.models.Streamable
+import dev.brahmkshatriya.echo.common.models.Streamable.Source.Companion.toSource
+import dev.brahmkshatriya.echo.playback.MediaItemUtils.metadataKey
 import dev.brahmkshatriya.echo.playback.MediaItemUtils.toKey
 import dev.brahmkshatriya.echo.playback.source.StreamableDataSource.Companion.uri
+import dev.brahmkshatriya.echo.utils.CacheUtils.getFromCache
 import dev.brahmkshatriya.echo.utils.CacheUtils.saveToCache
-import java.util.WeakHashMap
-
 class StreamableResolver(
     private val context: Context,
-    private val current: WeakHashMap<String, Result<Streamable.Media.Server>>,
+    private val current: MutableMap<String, Result<Streamable.Media.Server>>,
 ) : Resolver {
 
     @OptIn(UnstableApi::class)
     override fun resolveDataSpec(dataSpec: DataSpec): DataSpec {
-        val (id, index) = dataSpec.uri.toString().toKey().getOrNull() ?: return dataSpec
-        val streamable = runCatching { current[id]!!.getOrThrow().sources[index] }
-        val uri = streamable.map {
-            if (!it.isLive)
-                context.saveToCache(it.uri.toString(), dataSpec.uri.toString(), "player")
-            it.uri
+        val (id, serverIndex, sourceIndex, extensionId) = dataSpec.uri.toString().toKey().getOrNull() ?: return dataSpec
+        val originalKey = dataSpec.uri.toString()
+
+        val serverResult = current[id]
+        if (serverResult != null) {
+            val streamable = runCatching {
+                serverResult.getOrThrow().sources[sourceIndex]
+            }
+            val uri = streamable.map {
+                var finalUri = it.uri
+                val sourceUri = finalUri.toString()
+                if (!it.isLive) {
+                    if (sourceUri.isNullOrEmpty()) {
+                        val cached = context.getFromCache<String>(originalKey, "player")
+                        if (cached != null) {
+                            finalUri = Uri.parse(cached)
+                        }
+                    } else {
+                        context.saveToCache(originalKey, sourceUri, "player")
+                    }
+                }
+                finalUri
+            }
+            return dataSpec.copy(
+                uri = uri.getOrNull(),
+                key = originalKey,
+                customData = streamable
+            )
         }
-        return dataSpec.copy(uri = uri.getOrNull(), customData = streamable)
+
+        // Offline recovery: search for ANY cached index of this track
+        for (i in 0..20) {
+            val altKey = metadataKey(id, i, 0, extensionId)
+            val cachedUri = context.getFromCache<String>(altKey, "player")
+            if (cachedUri != null) {
+                return dataSpec.copy(
+                    uri = Uri.parse(cachedUri),
+                    key = altKey, // Use the key that was used when caching
+                    customData = Result.success(cachedUri.toSource())
+                )
+            }
+        }
+
+        return dataSpec
     }
 
     companion object {

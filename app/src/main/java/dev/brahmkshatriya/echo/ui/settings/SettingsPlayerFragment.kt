@@ -12,7 +12,13 @@ import dev.brahmkshatriya.echo.R
 import dev.brahmkshatriya.echo.common.models.ImageHolder.Companion.toResourceImageHolder
 import dev.brahmkshatriya.echo.playback.PlayerService.Companion.CACHE_SIZE
 import dev.brahmkshatriya.echo.playback.PlayerService.Companion.CLOSE_PLAYER
-import dev.brahmkshatriya.echo.playback.PlayerService.Companion.MORE_BRAIN_CAPACITY
+import dev.brahmkshatriya.echo.playback.PlayerService.Companion.CACHE_IN_RAM_ONLY
+import dev.brahmkshatriya.echo.playback.PlayerService.Companion.AUDIO_OFFLOAD_ENABLED
+import dev.brahmkshatriya.echo.playback.PlayerService.Companion.PRELOAD_FUTURE_TRACKS_S
+import dev.brahmkshatriya.echo.playback.PlayerService.Companion.PRELOAD_TRACK_CACHE
+import dev.brahmkshatriya.echo.playback.PlayerService.Companion.PAUSE_FADE_DURATION
+import dev.brahmkshatriya.echo.playback.PlayerService.Companion.RESUME_FADE_DURATION
+import dev.brahmkshatriya.echo.playback.PlayerService.Companion.SKIP_FADE_DURATION
 import dev.brahmkshatriya.echo.playback.PlayerService.Companion.SKIP_SILENCE
 import dev.brahmkshatriya.echo.playback.PlayerService.Companion.STREAM_QUALITY
 import dev.brahmkshatriya.echo.playback.PlayerService.Companion.UNMETERED_STREAM_QUALITY
@@ -69,7 +75,7 @@ class SettingsPlayerFragment : BaseSettingsFragment() {
                     entryValues = streamQualities
                     layoutResource = R.layout.preference
                     isIconSpaceReserved = false
-                    setDefaultValue(streamQualities[1])
+                    setDefaultValue(streamQualities[2])
                     addPreference(this)
                 }
 
@@ -78,11 +84,11 @@ class SettingsPlayerFragment : BaseSettingsFragment() {
                     title = getString(R.string.unmetered_stream_quality)
                     summary = getString(R.string.unmetered_stream_quality_summary)
                     entries =
-                        context.resources.getStringArray(R.array.stream_qualities) + getString(R.string.off)
+                        context.resources.getStringArray(R.array.stream_qualities) + getString(R.string.unmetered_stream_quality_auto)
                     entryValues = streamQualities + "off"
                     layoutResource = R.layout.preference
                     isIconSpaceReserved = false
-                    setDefaultValue("off")
+                    setDefaultValue(streamQualities[1])
                     addPreference(this)
                 }
             }
@@ -114,6 +120,48 @@ class SettingsPlayerFragment : BaseSettingsFragment() {
                     addPreference(this)
                 }
 
+                val preloadFuture = MaterialSliderPreference(context, 0, 1200, steps = 10, allowOverride = true).apply {
+                    key = PRELOAD_FUTURE_TRACKS_S
+                    title = getString(R.string.preload_future_tracks)
+                    summary = getString(R.string.preload_future_tracks_summary)
+                    isIconSpaceReserved = false
+                    setDefaultValue(10)
+                }
+
+                val cacheInRam = SwitchPreferenceCompat(context).apply {
+                    key = CACHE_IN_RAM_ONLY
+                    title = getString(R.string.cache_in_ram_only)
+                    summary = getString(R.string.cache_in_ram_only_summary)
+                    layoutResource = R.layout.preference_switch
+                    isIconSpaceReserved = false
+                    setDefaultValue(false)
+                }
+
+                SwitchPreferenceCompat(context).apply {
+                    key = PRELOAD_TRACK_CACHE
+                    title = getString(R.string.preload_track)
+                    summary = getString(R.string.preload_track_summary)
+                    layoutResource = R.layout.preference_switch
+                    isIconSpaceReserved = false
+                    setDefaultValue(true)
+                    setOnPreferenceChangeListener { _, newValue ->
+                        // Safely cast to Boolean to prevent ClassCastException and silent failures, 
+                        // ensuring dependent UI elements correctly toggle their visibility.
+                        val isEnabled = newValue as? Boolean == true
+                        preloadFuture.isVisible = isEnabled
+                        cacheInRam.isVisible = isEnabled
+                        true
+                    }
+                    addPreference(this)
+                }
+
+                val isPreloadEnabled = preferenceManager.sharedPreferences?.getBoolean(PRELOAD_TRACK_CACHE, true) == true
+                preloadFuture.isVisible = isPreloadEnabled
+                addPreference(preloadFuture)
+
+                cacheInRam.isVisible = isPreloadEnabled
+                addPreference(cacheInRam)
+
                 SwitchPreferenceCompat(context).apply {
                     key = SKIP_SILENCE
                     title = getString(R.string.skip_silence)
@@ -124,10 +172,39 @@ class SettingsPlayerFragment : BaseSettingsFragment() {
                     addPreference(this)
                 }
 
+
+                val skipFadeDuration = MaterialSliderPreference(context, 0, 30).apply {
+                    key = SKIP_FADE_DURATION
+                    title = getString(R.string.skip_fade_duration)
+                    summary = getString(R.string.skip_fade_duration_summary)
+                    isIconSpaceReserved = false
+                    setDefaultValue(10)
+                }
+
+                val pauseFadeDuration = MaterialSliderPreference(context, 0, 20).apply {
+                    key = PAUSE_FADE_DURATION
+                    title = getString(R.string.pause_fade)
+                    summary = getString(R.string.pause_fade_summary)
+                    isIconSpaceReserved = false
+                    setDefaultValue(5)
+                }
+
+                val resumeFadeDuration = MaterialSliderPreference(context, 0, 20).apply {
+                    key = RESUME_FADE_DURATION
+                    title = getString(R.string.resume_fade)
+                    summary = getString(R.string.resume_fade_summary)
+                    isIconSpaceReserved = false
+                    setDefaultValue(5)
+                }
+
+                addPreference(skipFadeDuration)
+                addPreference(pauseFadeDuration)
+                addPreference(resumeFadeDuration)
+
                 SwitchPreferenceCompat(context).apply {
-                    key = MORE_BRAIN_CAPACITY
-                    title = getString(R.string.more_brain_capacity)
-                    summary = getString(R.string.more_brain_capacity_summary)
+                    key = AUDIO_OFFLOAD_ENABLED
+                    title = getString(R.string.hardware_audio_offload)
+                    summary = getString(R.string.hardware_audio_offload_summary)
                     layoutResource = R.layout.preference_switch
                     isIconSpaceReserved = false
                     setDefaultValue(false)

@@ -15,6 +15,7 @@ import dev.brahmkshatriya.echo.databinding.ItemShelfCategoryBinding
 import dev.brahmkshatriya.echo.ui.feed.FeedClickListener
 import dev.brahmkshatriya.echo.ui.feed.FeedType
 import dev.brahmkshatriya.echo.utils.image.ImageUtils.loadInto
+import dev.brahmkshatriya.echo.utils.ui.UiUtils.dpToPx
 import dev.brahmkshatriya.echo.utils.ui.UiUtils.isNightMode
 import kotlin.math.roundToInt
 
@@ -44,6 +45,11 @@ class CategoryViewHolder(
     override fun bind(feed: FeedType.Category) {
         this.feed = feed
         val category = feed.shelf
+        // A null-feed Category is a header/label (see Shelf.Category doc), not a destination: neuter the
+        // (unconditionally wired) click so tap / D-pad-center can't fire the dead "No feed found" snack.
+        // Keep it FOCUSABLE — the TV feed anchors initial focus to position 0 with no fallback, so a
+        // non-focusable leading row would strand initial focus. Focusable-but-inert = visible, no snack.
+        binding.root.isClickable = category.feed != null
         binding.bind(category)
     }
 
@@ -59,6 +65,9 @@ class CategoryViewHolder(
                     ?: ResourcesCompat.getColor(resources, R.color.amoled_fg_semi, null)
                 setCardBackgroundColor(color)
             }
+            val isPlainLabel = category.image == null && category.backgroundColor == null && category.feed == null
+            val vertPad = if (isPlainLabel) 4.dpToPx(root.context) else 6.dpToPx(root.context)
+            innerLayout?.setPadding(innerLayout.paddingLeft, vertPad, innerLayout.paddingRight, vertPad)
         }
 
         fun CardView.applyBackground(hex: String?): Int? {

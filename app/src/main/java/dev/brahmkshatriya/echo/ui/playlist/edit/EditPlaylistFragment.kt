@@ -4,7 +4,6 @@ import android.os.Bundle
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
-import androidx.core.os.bundleOf
 import androidx.core.view.isVisible
 import androidx.fragment.app.Fragment
 import androidx.recyclerview.widget.ConcatAdapter
@@ -51,10 +50,12 @@ class EditPlaylistFragment : Fragment() {
         parametersOf(extensionId, playlist, loaded, selectedTab, -1)
     }
 
-    private val adapter by lazy {
-        val (listener, itemCallback) = PlaylistTrackAdapter.getTouchHelperAndListener(vm)
+    private val adapter: PlaylistTrackAdapter by lazy {
+        lateinit var adapterRef: PlaylistTrackAdapter
+        val (listener, itemCallback) = PlaylistTrackAdapter.getTouchHelperAndListener(vm) { adapterRef }
         itemCallback.attachToRecyclerView(binding.recyclerView)
-        PlaylistTrackAdapter(listener)
+        adapterRef = PlaylistTrackAdapter(listener)
+        adapterRef
     }
 
     override fun onCreateView(
@@ -121,7 +122,10 @@ class EditPlaylistFragment : Fragment() {
         observe(vm.dataFlow) { headerAdapter.data = it }
         observe(vm.tabsFlow) { tabAdapter.data = it }
         observe(vm.selectedTabFlow) { tabAdapter.selected = vm.tabsFlow.value.indexOf(it) }
-        observe(vm.currentTracks) { adapter.submitList(it) }
+        observe(vm.currentTracks) {
+            if (adapter.isDragging) adapter.pendingList = it
+            else adapter.submitList(it)
+        }
 
         val combined = vm.originalList.combine(vm.saveState) { a, b -> a to b }
         observe(combined) { (tracks, save) ->
@@ -135,7 +139,7 @@ class EditPlaylistFragment : Fragment() {
 
             val save = save as? EditPlaylistViewModel.SaveState.Saved ?: return@observe
             if (save.result.isSuccess) parentFragmentManager.setFragmentResult(
-                "reload", bundleOf("id" to playlist.id)
+                "reload", Bundle().apply { putString("id", playlist.id) }
             )
             parentFragmentManager.popBackStack()
         }

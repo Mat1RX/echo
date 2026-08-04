@@ -63,6 +63,7 @@ class ExtensionsViewModel(
                 val ext = extensionLoader.music.getExtensionOrThrow(id)
                 extensionLoader.setupMusicExtension(ext, true)
             }.getOrElse {
+                if (it is CancellationException) throw it
                 app.throwFlow.emit(it)
             }
         }
@@ -81,12 +82,13 @@ class ExtensionsViewModel(
         flow.value = list
     }
 
-    private val updateTime = 1000 * 60 * 60 * 2 // Check every 2hrs
+    private val updateTime = 1000 * 60 * 60 * 24 // Check every 24hrs
     private fun shouldCheckForExtensionUpdates(): Boolean {
         val check = app.settings.getBoolean("check_for_updates", true)
         if (!check) return false
         val lastUpdateCheck = app.context.getFromCache<Long>("last_update_check") ?: 0
-        return System.currentTimeMillis() - lastUpdateCheck > updateTime
+        val elapsed = System.currentTimeMillis() - lastUpdateCheck
+        return elapsed > updateTime
     }
 
     private suspend fun message(msg: String) {
@@ -94,17 +96,23 @@ class ExtensionsViewModel(
     }
 
     fun update(activity: FragmentActivity, force: Boolean) = viewModelScope.launch {
+        if (!force) extensionLoader.isLoaded.first { it }
         if (!force && !shouldCheckForExtensionUpdates()) return@launch
-        activity.saveToCache("last_update_check", System.currentTimeMillis())
+        app.context.saveToCache("last_update_check", System.currentTimeMillis())
         activity.cleanupTempApks()
-        message(app.context.getString(R.string.checking_for_updates))
+        message(app.context.getString(R.string.checking_for_extension_updates))
         val appApk = updateApp(app)
         runCatching {
             if (appApk != null) {
-                activity.saveToCache("last_update_check", 0)
+                app.context.saveToCache("last_update_check", 0)
                 awaitInstallation(appApk).getOrThrow()
-            } else extensionLoader.all.value.forEach { updateExt(it) }
-        }.getOrElse { app.throwFlow.emit(it) }
+            } else {
+                var anyUpdateFound = false
+                extensionLoader.all.value.forEach { if (updateExt(it)) anyUpdateFound = true }
+                if (!anyUpdateFound)
+                    message(app.context.getString(R.string.all_extensions_up_to_date))
+            }
+        }.getOrElse { if (it is CancellationException) throw it; app.throwFlow.emit(it) }
     }
 
     data class PromptResult(
@@ -137,13 +145,21 @@ class ExtensionsViewModel(
         promptResultFlow.emit(PromptResult(file, install, type, id, supportedLinks))
     }
 
-    private suspend fun updateExt(ext: Extension<*>, show: Boolean = false) {
-        val file = getExtensionUpdate(ext, show) ?: return
-        install(ext.id, ext.metadata.importType, file).onFailure {
+    private suspend fun updateExt(ext: Extension<*>, show: Boolean = false): Boolean {
+        val file = getExtensionUpdate(ext, show) ?: return false
+        val type = ext.metadata.importType
+        if (type == ImportType.File) {
+            installPromptFlow.emit(file)
+            val result = promptResultFlow.first { it.file == file }
+            if (!result.accepted) return true
+        }
+        install(ext.id, type, file).onFailure {
+            if (it is CancellationException) throw it
             app.throwFlow.emit(it)
-            return
+            return true
         }
         message(app.context.getString(R.string.extension_updated_successfully, ext.name))
+        return true
     }
 
     fun update(extension: Extension<*>) = viewModelScope.launch { updateExt(extension, true) }
@@ -154,6 +170,7 @@ class ExtensionsViewModel(
             val result = promptResultFlow.first { it.file == file }
             if (!result.accepted) return@forEach
             install(result.id, result.type, result.file).onFailure {
+                if (it is CancellationException) throw it
                 app.throwFlow.emit(it)
                 return@forEach
             }
@@ -172,6 +189,7 @@ class ExtensionsViewModel(
         }.exceptionOrNull()
         val result = if (extension.metadata.importType == ImportType.App) appResult else fileResult
         if (result == null) message(app.context.getString(R.string.extension_uninstalled_successfully))
+        else if (result is CancellationException) throw result
         else app.throwFlow.emit(result)
     }
 
@@ -215,9 +233,11 @@ class ExtensionsViewModel(
         val updateUrl = extension.metadata.updateUrl ?: return null
         val url = runCatching {
             getUpdateFileUrl(currentVersion, updateUrl, client).getOrThrow()
-        }.recoverCatching {
-            throw it.toAppException(extension)
-        }.getOrThrow(app.throwFlow)
+        }.getOrElse {
+            if (it is CancellationException) throw it
+            app.throwFlow.emit(it)
+            return null
+        }
         if (url == null) {
             if (show) message(
                 app.context.getString(R.string.no_update_available_for_x, extension.name)
@@ -227,9 +247,11 @@ class ExtensionsViewModel(
         message(app.context.getString(R.string.downloading_update_for_x, extension.name))
         val file = runCatching {
             downloadUpdate(app.context, url, client).getOrThrow()
-        }.recoverCatching {
-            throw it.toAppException(extension)
-        }.getOrThrow(app.throwFlow) ?: return null
+        }.getOrElse {
+            if (it is CancellationException) throw it
+            app.throwFlow.emit(it)
+            return null
+        }
         return file
     }
 

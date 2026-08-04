@@ -2,6 +2,7 @@ package dev.brahmkshatriya.echo.playback
 
 import android.content.Context
 import android.content.SharedPreferences
+import android.util.Log
 import android.net.Uri
 import android.os.Bundle
 import androidx.annotation.OptIn
@@ -13,9 +14,12 @@ import androidx.media3.common.MediaMetadata
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.ThumbRating
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.datasource.cache.ContentMetadata
+import androidx.media3.datasource.cache.SimpleCache
 import dev.brahmkshatriya.echo.R
 import dev.brahmkshatriya.echo.common.models.EchoMediaItem
 import dev.brahmkshatriya.echo.common.models.ImageHolder
+import dev.brahmkshatriya.echo.common.models.Radio
 import dev.brahmkshatriya.echo.common.models.Streamable
 import dev.brahmkshatriya.echo.common.models.Track
 import dev.brahmkshatriya.echo.di.App
@@ -31,6 +35,23 @@ import kotlin.io.encoding.Base64
 import kotlin.text.Charsets.UTF_8
 
 object MediaItemUtils {
+
+    // Marker on a seed's context that means "display-only radio label, not a real radio to generate".
+    // PlayerRadio strips a context carrying this before calling extension.radio(), so radio GENERATION
+    // is unchanged (it still receives null exactly as before) — this exists purely so the now-playing
+    // header can read "Playing from <track> Radio" from the first second of a bare-track/Radio-History
+    // seed, instead of only once the real auto-radio kicks in on the next track.
+    const val LABEL_ONLY_RADIO = "label_only_radio"
+
+    // A stand-in Radio context whose title matches what the real track-radio shows one track later
+    // (Deezer's asTrackRadio uses "<title> Radio"). Cover mirrors the seed track. Marked LABEL_ONLY_RADIO
+    // so it only ever labels the header and never alters which radio is generated.
+    fun trackRadioPlaceholder(track: Track): Radio = Radio(
+        id = track.id,
+        title = "${track.title} Radio",
+        cover = track.cover,
+        extras = mapOf(LABEL_ONLY_RADIO to "true"),
+    )
 
     fun build(
         app: App,
@@ -65,15 +86,17 @@ object MediaItemUtils {
             putAll(mediaMetadata.extras!!)
             putInt("serverIndex", index)
             putInt("retries", 0)
+            putBoolean("forced", true)
         }
         buildWithBundle(this, bundle)
     }
 
-    fun buildSource(mediaItem: MediaItem, index: Int) = with(mediaItem) {
+    fun buildSource(mediaItem: MediaItem, index: Int, forced: Boolean = true) = with(mediaItem) {
         val bundle = Bundle().apply {
             putAll(mediaMetadata.extras!!)
             putInt("sourceIndex", index)
             putInt("retries", 0)
+            putBoolean("forced", forced)
         }
         buildWithBundle(this, bundle)
     }
@@ -108,24 +131,65 @@ object MediaItemUtils {
     private fun buildWithBundle(mediaItem: MediaItem, bundle: Bundle) = run {
         val item = mediaItem.buildUpon()
         val metadata =
-            mediaItem.mediaMetadata.buildUpon().setExtras(bundle).setSubtitle(bundle.indexes())
+            mediaItem.mediaMetadata.buildUpon().setExtras(bundle)
                 .build()
         item.setMediaMetadata(metadata)
         item.build()
     }
 
     @Serializable
-    data class Key(val trackId: String, val sourceIndex: Int, val extensionId: String)
+    data class Key(val trackId: String, val serverIndex: Int, val sourceIndex: Int, val extensionId: String)
 
     fun String.toKey() = runCatching {
         Base64.decode(this).toString(UTF_8).toData<Key>().getOrThrow()
+    }
+
+    fun metadataKey(trackId: String, serverIndex: Int, sourceIndex: Int, extensionId: String) =
+        Base64.encode(Key(trackId, serverIndex, sourceIndex, extensionId).toJson().toByteArray())
+
+    @OptIn(UnstableApi::class)
+    fun SimpleCache.getCachedProgress(key: String): Float {
+        val length = ContentMetadata.getContentLength(getContentMetadata(key))
+        if (length <= 0L) return 0f
+        val totalCached = getCachedBytes(key, 0, length)
+        return (totalCached.toDouble() / length.toDouble()).toFloat().coerceIn(0f, 1f)
+    }
+
+    @OptIn(UnstableApi::class)
+    fun SimpleCache.isFullyCached(key: String): Boolean {
+        val length = ContentMetadata.getContentLength(getContentMetadata(key))
+        // Unknown content length: require at least 256KB cached to avoid false positives
+        // from partial downloads (e.g. only headers fetched).
+        if (length <= 0L) return getCachedBytes(key, 0, Long.MAX_VALUE) >= 256 * 1024
+
+        // 1. Contiguous check from start to end (The gold standard)
+        if (isCached(key, 0, length)) return true
+
+        // 2. Lenient check: total bytes cached >= 98% OR missing less than 64KB.
+        // This handles cases where the server-reported length is slightly off or
+        // the player stops right before the end.
+        val totalCached = getCachedBytes(key, 0, length)
+        if (totalCached >= length || totalCached > length * 0.98 || length - totalCached < 64 * 1024) return true
+        
+        if (totalCached > 0) {
+            val percent = (totalCached * 100 / length).toInt()
+            Log.d("EchoCache", "Partial ($percent%): length=$length cached=$totalCached key=$key")
+        }
+        return false
+    }
+
+    @OptIn(UnstableApi::class)
+    fun Track.isFullyCached(cache: SimpleCache, extensionId: String): Boolean {
+        return servers.indices.any { index ->
+            cache.isFullyCached(metadataKey(id, index, 0, extensionId))
+        }
     }
 
     fun buildForSource(
         mediaItem: MediaItem, index: Int, source: Streamable.Source?,
     ) = with(mediaItem) {
         val item = buildUpon()
-        item.setUri(Base64.encode(Key(track.id, index, extensionId).toJson().toByteArray()))
+        item.setUri(metadataKey(track.id, serverIndex, index, extensionId))
         when (val decryption = (source as? Streamable.Source.Http)?.decryption) {
             null -> {}
             is Streamable.Decryption.Widevine -> {
@@ -144,9 +208,12 @@ object MediaItemUtils {
         background: Streamable.Media.Background?,
         subtitle: Streamable.Media.Subtitle?,
     ) = with(mediaItem) {
-        val bundle = mediaMetadata.extras!!
-        bundle.putSerialized("background", background)
+        val bundle = Bundle().apply {
+            putAll(mediaMetadata.extras!!)
+            putSerialized("background", background)
+        }
         val item = buildUpon()
+        item.setMediaMetadata(mediaMetadata.buildUpon().setExtras(bundle).build())
         item.setSubtitleConfigurations(
             if (subtitle == null) listOf()
             else listOf(
@@ -201,17 +268,18 @@ object MediaItemUtils {
                 )
                 putSerialized("downloaded", downloaded)
             })
-            .setSubtitle(bundle.indexes())
             .setMediaType(MediaMetadata.MEDIA_TYPE_MUSIC)
             .setIsPlayable(true)
             .setIsBrowsable(false)
+            // Publish the catalog duration so the session/AA (and lockscreen) can render the
+            // progress bar total before prepare() resolves the stream duration. durationMs is a
+            // metadata field, independent of player.getDuration(); invisible to the resume path.
+            .apply { duration?.let { setDurationMs(it) } }
             .build()
     }
 
-    private fun Bundle.indexes() =
-        "${getInt("serverIndex")} ${getInt("sourceIndex")} ${getInt("backgroundIndex")} ${getInt("subtitleIndex")}"
 
-    private val Bundle?.stateNullable
+    val Bundle?.stateNullable
         get() = this?.getSerialized<MediaState<Track>>("state")?.getOrNull()
     val Bundle?.state get() = requireNotNull(stateNullable)
     val Bundle?.track get() = state.item
@@ -225,10 +293,12 @@ object MediaItemUtils {
     val Bundle?.background
         get() = this?.getSerialized<Streamable.Media.Background?>("background")?.getOrNull()
     val Bundle?.retries get() = this?.getInt("retries") ?: 0
+    val Bundle?.isForced get() = this?.getBoolean("forced") ?: false
     val Bundle?.unloadedCover
         get() = this?.getSerialized<ImageHolder?>("unloadedCover")?.getOrNull()
     val Bundle?.downloaded get() = this?.getSerialized<List<String>>("downloaded")?.getOrNull()
 
+    val MediaItem.stateNullable get() = mediaMetadata.extras.stateNullable
     val MediaItem.state get() = mediaMetadata.extras.state
     val MediaItem.track get() = mediaMetadata.extras.track
     val MediaItem.extensionId get() = mediaMetadata.extras.extensionId
@@ -241,6 +311,7 @@ object MediaItemUtils {
     val MediaItem.background get() = mediaMetadata.extras.background
     val MediaMetadata.isLiked get() = (userRating as? ThumbRating)?.isThumbsUp == true
     val MediaItem.isLiked get() = mediaMetadata.isLiked
+    val MediaItem.isForced get() = mediaMetadata.extras.isForced
     val MediaItem.retries get() = mediaMetadata.extras.retries
     val MediaItem.unloadedCover get() = mediaMetadata.extras.unloadedCover
     val MediaItem.downloaded get() = mediaMetadata.extras.downloaded

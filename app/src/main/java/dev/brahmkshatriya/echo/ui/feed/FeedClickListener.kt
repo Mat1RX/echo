@@ -138,10 +138,11 @@ open class FeedClickListener(
     ): Boolean {
         if (extensionId == null) return notFoundSnack(R.string.extension)
         if (item == null) return notFoundSnack(R.string.item)
-        MediaMoreBottomSheet.newInstance(
+        MediaMoreBottomSheet.show(
+            fragment, fragmentManager,
             containerId, extensionId, item, false,
             context = context, tabId = tabId, pos = index
-        ).show(fragmentManager, null)
+        )
         return true
     }
 
@@ -154,7 +155,21 @@ open class FeedClickListener(
     ): Boolean {
         if (extensionId == null) return notFoundSnack(R.string.extension)
         if (tracks.isNullOrEmpty()) return notFoundSnack(R.string.tracks)
+
+        // A single track tapped with no surrounding context IS a "radio" tile (Home "Mixes inspired by",
+        // search): play the SEED first, then extend it into a radio. Route to playTrackRadio, which queues
+        // the seed and APPENDS the generated radio server-side — mirroring phone's setQueue+auto-radio, but
+        // explicit so it works on TV where auto-radio never fires (the seed used to loop). Videos are
+        // excluded (a "<title> Radio" label doesn't fit video). Multi-track / in-context taps queue normally.
+        val single = tracks.getOrNull(pos)?.takeIf {
+            context == null && tracks.size == 1 &&
+                it.type != Track.Type.Video && it.type != Track.Type.HorizontalVideo
+        }
         val vm by fragment.activityViewModels<PlayerViewModel>()
+        if (single != null) {
+            vm.playTrackRadio(extensionId, single)
+            return true
+        }
         vm.setQueue(extensionId, tracks, pos, context)
         vm.setPlaying(true)
         return true

@@ -30,8 +30,8 @@
         <item name="echoBackground">?colorSurface</item>
         <item name="navBackground">?colorSurfaceContainer</item>
 
-        <item name="itemCoverSize">96dp</item>
-        <item name="itemCorner">8dp</item>
+        <item name="itemCoverSize">@dimen/item_cover_size</item>
+        <item name="itemCorner">@dimen/item_corner</item>
     </style>
 
     <style name="Default" parent="Base.Theme.Echo">
@@ -45,10 +45,10 @@
     </style>
 
     <style name="BigCover" parent="Default">
-        <item name="itemCoverSize">128dp</item>
+        <item name="itemCoverSize">@dimen/item_cover_size_big</item>
     </style>
 
     <style name="AmoledBigCover" parent="Amoled">
-        <item name="itemCoverSize">128dp</item>
+        <item name="itemCoverSize">@dimen/item_cover_size_big</item>
     </style>
 </resources>

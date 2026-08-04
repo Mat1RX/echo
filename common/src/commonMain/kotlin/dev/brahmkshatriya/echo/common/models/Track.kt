@@ -35,7 +35,7 @@ import java.util.Locale
  * @property extras Any extra data you want to associate with the track
  * @property isPlayable Whether the track is playable.
  * @property streamables The streamables of the track
- * @property isRadioSupported Whether the track can used to create a radio. Checkout [RadioClient]
+ * @property isRadioSupported Whether the track can be used to create a radio. Checkout [RadioClient]
  * @property isFollowable Whether the track can be followed. Checkout [FollowClient]
  * @property isSaveable Whether the track can be saved to library. Checkout [SaveClient]
  * @property isLikeable Whether the track can be liked. Checkout [LikeClient]
@@ -77,8 +77,19 @@ data class Track(
     override val isShareable: Boolean = true,
 ) : EchoMediaItem {
 
+    // Identity-based hashCode, NOT the data-class default over all fields. The generated hashCode recurses
+    // through extras (Map), streamables (each with its own extras), album, artists, cover/background — an
+    // O(object-graph) cost. Paging hashes EVERY item of EVERY page on insert
+    // (PageFetcherSnapshotState.insert -> pageKeys[page.hashCode()]) and, because FeedData does
+    // cachedIn(viewModelScope), that runs on the MAIN thread (flowOn(IO) covers only the outer flow, not the
+    // cachedIn-collected pageEventFlow) -> ANR on rich feeds. Keying on `id` makes it O(1).
+    // equals() is deliberately left as the data-class value equality: DiffUtil.areContentsTheSame (==) and
+    // HashSet/HashMap dedup rely on it. A coarser hashCode is contract-safe (value-equal tracks share `id`,
+    // so equal => equal hash) and only increases hash collisions, which equals() resolves.
+    override fun hashCode(): Int = id.hashCode()
+
     enum class Type {
-        Song, Podcast, VideoSong, Video, HorizontalVideo
+        Song, Podcast, @Suppress("unused") VideoSong, Video, HorizontalVideo
     }
 
     @Serializable

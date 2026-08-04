@@ -12,6 +12,7 @@ import dev.brahmkshatriya.echo.download.exceptions.DownloaderExtensionNotFoundEx
 import dev.brahmkshatriya.echo.download.tasks.BaseTask.Companion.getTitle
 import dev.brahmkshatriya.echo.extensions.db.models.UserEntity
 import dev.brahmkshatriya.echo.extensions.exceptions.AppException
+import dev.brahmkshatriya.echo.extensions.exceptions.ExtensionLoadException
 import dev.brahmkshatriya.echo.extensions.exceptions.ExtensionLoaderException
 import dev.brahmkshatriya.echo.extensions.exceptions.ExtensionNotFoundException
 import dev.brahmkshatriya.echo.extensions.exceptions.InvalidExtensionListException
@@ -42,8 +43,28 @@ import java.nio.channels.UnresolvedAddressException
 object ExceptionUtils {
 
     private fun Context.getTitle(throwable: Throwable): String? = when (throwable) {
-        is LinkageError, is ReflectiveOperationException -> getString(R.string.extension_out_of_date)
+        // Class/library LOAD failure — the extension can't be loaded at all (missing/repackaged class,
+        // bad dex, missing native lib). Often the APP's fault (e.g. an R8 ABI break repackaging :common),
+        // never fixable by "updating". Name the cause + missing class so the real problem is self-evident.
+        // MUST precede the LinkageError/ReflectiveOperationException catch-all below (these are subtypes).
+        is NoClassDefFoundError, is ClassNotFoundException, is UnsatisfiedLinkError ->
+            getString(R.string.extension_failed_to_load_x, "${throwable::class.simpleName}: ${throwable.message}")
+
+        // Method/field-level ABI drift (built against a different :common signature). A compatibility
+        // STATE, not an installable update — worded to NOT borrow the update system's "out of date /
+        // update available" language (the update checker may correctly report no update exists).
+        is LinkageError, is ReflectiveOperationException ->
+            getString(R.string.extension_incompatible_version)
+
         is UnknownHostException, is UnresolvedAddressException -> getString(R.string.no_internet)
+
+        // Deferred class-load/instantiate failure carrying extension identity (see ExtensionParser).
+        // Root-cause unwrapped so a constructor failure wrapped in InvocationTargetException shows the
+        // real error, not the reflection wrapper.
+        is ExtensionLoadException -> getString(
+            R.string.extension_failed_to_load_x,
+            throwable.cause.rootCause.let { "${throwable.name} — ${it::class.simpleName}: ${it.message}" }
+        )
 
         is ExtensionLoaderException ->
             getString(R.string.error_loading_extension_from_x, throwable.clazz)
@@ -91,6 +112,12 @@ object ExceptionUtils {
             Source: ${throwable.source}
         """.trimIndent()
 
+        is ExtensionLoadException -> """
+            Extension: ${throwable.name}
+            ID: ${throwable.id}
+            Class: ${throwable.className}
+        """.trimIndent()
+
         is ExtensionNotFoundException -> "Extension ID: ${throwable.id}"
         is RequiredExtensionsMissingException ->
             "Required Extension: ${throwable.required.joinToString(", ")}"
@@ -131,11 +158,29 @@ object ExceptionUtils {
         throwable.cause?.let { append(getFinalDetails(it)) }
     }
 
-    private fun getStackTrace(throwable: Throwable): String = buildString {
-        appendLine("Version: ${appVersion()}")
-        appendLine(getFinalDetails(throwable))
-        appendLine("---Stack Trace---")
-        appendLine(throwable.stackTraceToString())
+    // ~16K chars. A String parcels at ~2 bytes/char (UTF-16), so this is ~32KB in the instance-state Bundle —
+    // far under the ~1MB TransactionTooLarge budget the un-capped trace was blowing on onSaveInstanceState
+    // (a DecodingException inlines the entire failed-to-decode response via getDetails).
+    private const val TRACE_CHAR_CAP = 16_384
+
+    private fun getStackTrace(throwable: Throwable): String {
+        // Order matters for the head-cap below: FRAMES FIRST (bounded, and their "Caused by: …: Response
+        // code: 401" lines carry the exception types + HTTP responseCode — the key discriminators), then the
+        // UNBOUNDED raw payload LAST (getFinalDetails inlines full toJson() / DecodingException.json, which is
+        // what reaches hundreds of KB). So a head-cap keeps the diagnostics and truncates only the raw tail.
+        val full = buildString {
+            appendLine("Version: ${appVersion()}")
+            appendLine("---Stack Trace---")
+            appendLine(throwable.stackTraceToString())
+            appendLine("---Details---")
+            append(getFinalDetails(throwable))
+        }
+        if (full.length <= TRACE_CHAR_CAP) return full
+        // Cap counts CHARS, and the marker states what was cut so a truncated trace is never mistaken for a
+        // full one (~2 bytes/char → the cut size in KB).
+        val cutKb = (full.length - TRACE_CHAR_CAP) * 2 / 1024
+        return full.take(TRACE_CHAR_CAP) +
+            "\n…[trace truncated: showing first $TRACE_CHAR_CAP of ${full.length} chars, ~${cutKb}KB cut]"
     }
 
     @Serializable

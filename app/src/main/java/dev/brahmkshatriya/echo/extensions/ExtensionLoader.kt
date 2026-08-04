@@ -14,7 +14,9 @@ import dev.brahmkshatriya.echo.common.clients.LoginClient
 import dev.brahmkshatriya.echo.common.helpers.Injectable
 import dev.brahmkshatriya.echo.common.helpers.WebViewClient
 import dev.brahmkshatriya.echo.common.models.ExtensionType
+import dev.brahmkshatriya.echo.common.models.ImportType
 import dev.brahmkshatriya.echo.common.models.Metadata
+import dev.brahmkshatriya.echo.common.models.ImageHolder.Companion.toImageHolder
 import dev.brahmkshatriya.echo.common.providers.GlobalSettingsProvider
 import dev.brahmkshatriya.echo.common.providers.LyricsExtensionsProvider
 import dev.brahmkshatriya.echo.common.providers.MessageFlowProvider
@@ -36,8 +38,11 @@ import dev.brahmkshatriya.echo.extensions.exceptions.AppException.Companion.toAp
 import dev.brahmkshatriya.echo.extensions.exceptions.RequiredExtensionsMissingException
 import dev.brahmkshatriya.echo.extensions.repo.CombinedRepository
 import dev.brahmkshatriya.echo.extensions.repo.ExtensionParser
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -55,7 +60,17 @@ class ExtensionLoader(
     val cache: SimpleCache,
 ) {
     val parser = ExtensionParser(app.context)
-    val scope = CoroutineScope(Dispatchers.IO)
+
+    // Same background safety net as App.scope: route UNCAUGHT failures of coroutines launched on this scope
+    // (eager injection, extension selection, network-triggered token work, etc.) to app.throwFlow so they
+    // degrade to the standard non-fatal instead of crashing. CancellationException never reaches the handler
+    // (guarded anyway); scope.launch bridges to the suspend emit (SupervisorJob keeps the scope alive after a
+    // child fails); runCatching keeps a recording failure from re-crashing. See App.exceptionHandler.
+    private val exceptionHandler: CoroutineExceptionHandler = CoroutineExceptionHandler { _, throwable ->
+        if (throwable is CancellationException) return@CoroutineExceptionHandler
+        runCatching { scope.launch { app.throwFlow.emit(throwable) } }
+    }
+    val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO + exceptionHandler)
     val db = ExtensionDatabase.create(app.context)
 
     private var permGrantedFlow = false
@@ -74,13 +89,11 @@ class ExtensionLoader(
 
     val unified = lazy { UnifiedExtension(app, cache) }
     val fileIgnoreFlow = MutableSharedFlow<File?>()
-    private val repository = CombinedRepository(
+    val repository = CombinedRepository(
         scope, app.context, fileIgnoreFlow, parser,
         UnifiedExtension.metadata to unified,
         OfflineExtension.metadata to lazy { OfflineExtension(app.context) },
 //        TestExtension.metadata to lazy { TestExtension() },
-//        DownloadExtension.metadata to lazy { DownloadExtension(app.context) }
-//        TrackerTestExtension.metadata to Injectable { TrackerTestExtension() },
     )
 
     private val settings = app.settings
@@ -185,12 +198,16 @@ class ExtensionLoader(
         music + tracker + lyrics + misc
     }.stateIn(scope, SharingStarted.Lazily, emptyList())
 
+    val isLoaded = repository.flow
+        .map { it != null }
+        .stateIn(scope, SharingStarted.Lazily, false)
+
     init {
         scope.launch {
             all.collect { list ->
                 list.forEach {
                     if (!it.isEnabled) return@forEach
-                    it.inject("providers", app.throwFlow) { injectProviders(this) }
+                    it.inject("providers", app.throwFlow) { injectProviders(this, it.id) }
                 }
             }
         }
@@ -222,9 +239,15 @@ class ExtensionLoader(
         ExtensionType.MISC -> misc
     }
 
-    private fun injectProviders(client: ExtensionClient) {
+    private fun injectProviders(client: ExtensionClient, selfId: String) {
         (client as? MusicExtensionsProvider)?.run {
-            inject(requiredMusicExtensions, music.value) { setMusicExtensions(it) }
+            // Never hand a music extension our built-in aggregator (Unified) or its own id: a
+            // third-party aggregator (e.g. "Combine") given Unified forms a Unified<->aggregator
+            // feed cycle (each aggregates the other) -> unbounded recursion -> StackOverflow. Dropping
+            // selfId also blocks a third-party aggregator that would self-include. This is the single
+            // distribution chokepoint, so no provider (present or future) can receive a cycle source.
+            val sources = music.value.filter { it.id != selfId && it.id != UnifiedExtension.UNIFIED_ID }
+            inject(requiredMusicExtensions, sources) { setMusicExtensions(it) }
         }
         (client as? TrackerExtensionsProvider)?.run {
             inject(requiredTrackerExtensions, tracker.value) { setTrackerExtensions(it) }

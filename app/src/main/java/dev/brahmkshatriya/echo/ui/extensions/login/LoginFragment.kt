@@ -1,5 +1,10 @@
 package dev.brahmkshatriya.echo.ui.extensions.login
 
+import android.app.UiModeManager
+import android.content.pm.PackageManager
+import android.content.res.Configuration
+import android.graphics.Bitmap
+import android.graphics.Color
 import android.os.Bundle
 import android.text.InputType.TYPE_CLASS_NUMBER
 import android.text.InputType.TYPE_CLASS_TEXT
@@ -9,7 +14,7 @@ import android.text.InputType.TYPE_TEXT_VARIATION_URI
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
-import androidx.core.os.bundleOf
+import androidx.core.content.getSystemService
 import androidx.core.view.isVisible
 import androidx.core.widget.doAfterTextChanged
 import androidx.fragment.app.Fragment
@@ -17,6 +22,8 @@ import androidx.fragment.app.commit
 import androidx.fragment.app.replace
 import androidx.lifecycle.lifecycleScope
 import com.google.android.material.transition.MaterialSharedAxis
+import com.google.zxing.BarcodeFormat
+import com.google.zxing.qrcode.QRCodeWriter
 import dev.brahmkshatriya.echo.R
 import dev.brahmkshatriya.echo.common.clients.LoginClient
 import dev.brahmkshatriya.echo.common.clients.LoginClient.InputField.Type
@@ -24,11 +31,13 @@ import dev.brahmkshatriya.echo.common.models.ExtensionType
 import dev.brahmkshatriya.echo.common.models.Message
 import dev.brahmkshatriya.echo.databinding.FragmentExtensionLoginCustomInputBinding
 import dev.brahmkshatriya.echo.databinding.FragmentExtensionLoginSelectorBinding
+import dev.brahmkshatriya.echo.databinding.FragmentExtensionLoginSmartBinding
 import dev.brahmkshatriya.echo.databinding.FragmentGenericCollapsableBinding
 import dev.brahmkshatriya.echo.databinding.FragmentWebviewBinding
 import dev.brahmkshatriya.echo.databinding.ItemExtensionButtonBinding
 import dev.brahmkshatriya.echo.databinding.ItemInputBinding
 import dev.brahmkshatriya.echo.extensions.exceptions.AppException
+import dev.brahmkshatriya.echo.ui.common.UiViewModel.Companion.applyAppBarRailInset
 import dev.brahmkshatriya.echo.ui.common.UiViewModel.Companion.applyBackPressCallback
 import dev.brahmkshatriya.echo.ui.common.UiViewModel.Companion.applyContentInsets
 import dev.brahmkshatriya.echo.ui.common.UiViewModel.Companion.applyInsets
@@ -38,18 +47,22 @@ import dev.brahmkshatriya.echo.utils.image.ImageUtils.loadAsCircle
 import dev.brahmkshatriya.echo.utils.ui.AnimationUtils.setupTransition
 import dev.brahmkshatriya.echo.utils.ui.AutoClearedValue.Companion.autoCleared
 import dev.brahmkshatriya.echo.utils.ui.UiUtils.configureAppBar
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.koin.androidx.viewmodel.ext.android.viewModel
 import org.koin.core.parameter.parametersOf
 
 class LoginFragment : Fragment() {
     companion object {
-        fun getBundle(extId: String, extName: String, extensionType: ExtensionType) = bundleOf(
-            "extId" to extId,
-            "extName" to extName,
-            "extensionType" to extensionType.name,
-        )
+        fun getBundle(extId: String, extName: String, extensionType: ExtensionType) = Bundle().apply {
+            putString("extId", extId)
+            putString("extName", extName)
+            putString("extensionType", extensionType.name)
+        }
 
         fun getBundle(error: AppException.LoginRequired) =
             getBundle(error.extension.id, error.extension.name, error.extension.type)
@@ -67,6 +80,7 @@ class LoginFragment : Fragment() {
                 toolbarOutline.alpha = offset
                 iconContainer.alpha = 1 - offset
             }
+            applyAppBarRailInset(appBarLayout)
             toolBar.setNavigationOnClickListener {
                 parentFragmentManager.popBackStack()
             }
@@ -149,6 +163,7 @@ class LoginFragment : Fragment() {
                     putAll(arguments)
                     putInt("formIndex", it.index ?: 0)
                 })
+                LoginViewModel.FragmentType.SmartLogin -> add<SmartLogin>(arguments)
             }
         }
     }
@@ -162,8 +177,12 @@ class LoginFragment : Fragment() {
             setupTransition(view)
             val binding = FragmentExtensionLoginSelectorBinding.bind(view)
             val client = loginViewModel.extension.value?.instance?.value
+            val uiModeManager = requireContext().getSystemService<UiModeManager>()!!
+            val isTV = requireContext().packageManager
+                .hasSystemFeature(PackageManager.FEATURE_LEANBACK) ||
+                uiModeManager.currentModeType == Configuration.UI_MODE_TYPE_TELEVISION
             val clients = listOfNotNull(
-                if (client is LoginClient.WebView) {
+                if (client is LoginClient.WebView && !isTV) {
                     val button = ItemExtensionButtonBinding.inflate(
                         layoutInflater, binding.loginToggleGroup, false
                     ).root
@@ -185,7 +204,7 @@ class LoginFragment : Fragment() {
                             )
                         }
                     }
-                } else listOf()).toTypedArray(),
+                } else listOf()).toTypedArray()
             )
             clients.forEachIndexed { index, pair ->
                 val button = pair.first
@@ -193,6 +212,14 @@ class LoginFragment : Fragment() {
                 binding.loginToggleGroup.addView(button)
                 button.id = index
             }
+            val count = binding.loginToggleGroup.childCount
+            repeat(count) { i ->
+                val button = binding.loginToggleGroup.getChildAt(i)
+                button.isFocusable = true
+                button.nextFocusDownId = if (i < count - 1) i + 1 else i
+                button.nextFocusUpId = if (i > 0) i - 1 else 0
+            }
+            if (count > 0) view.post { binding.loginToggleGroup.getChildAt(0).requestFocus() }
         }
     }
 
@@ -271,6 +298,13 @@ class LoginFragment : Fragment() {
 
                     customInput.addView(input.root)
                 }
+                if (form.inputFields.isNotEmpty()) {
+                    view.post {
+                        val firstLayout = customInput.getChildAt(0)
+                            as? com.google.android.material.textfield.TextInputLayout
+                        (firstLayout?.editText ?: customInput.getChildAt(0))?.requestFocus()
+                    }
+                }
                 loginCustomSubmit.setOnClickListener {
                     form.inputFields.forEach {
                         if (it.isRequired && loginViewModel.inputs[it.key].isNullOrEmpty()) {
@@ -298,6 +332,97 @@ class LoginFragment : Fragment() {
             lifecycleScope.launch {
                 loginViewModel.messageFlow.emit(m)
             }
+        }
+    }
+
+    class SmartLogin : Fragment(R.layout.fragment_extension_login_smart) {
+        private val loginViewModel by lazy {
+            requireParentFragment().viewModel<LoginViewModel>().value
+        }
+        private var pollingJob: Job? = null
+        private var countdownJob: Job? = null
+
+        override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
+            setupTransition(view, axis = MaterialSharedAxis.X)
+            val binding = FragmentExtensionLoginSmartBinding.bind(view)
+            loadCode(binding)
+            binding.regenerateButton.setOnClickListener { loadCode(binding) }
+        }
+
+        private fun loadCode(binding: FragmentExtensionLoginSmartBinding) {
+            pollingJob?.cancel()
+            countdownJob?.cancel()
+            binding.qrCode.visibility = View.INVISIBLE
+            binding.smartCode.visibility = View.INVISIBLE
+            binding.qrLoading.visibility = View.VISIBLE
+            binding.ttlCountdown.isVisible = false
+            binding.pollingStatus.isVisible = false
+            binding.errorText.isVisible = false
+            binding.regenerateButton.isVisible = false
+
+            val charset = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+            val code = (1..6).map { charset[kotlin.random.Random.nextInt(charset.length)] }.joinToString("")
+            val qrUrl = "echo://pair?code=$code"
+
+            lifecycleScope.launch {
+                runCatching {
+                    val writer = QRCodeWriter()
+                    val matrix = writer.encode(qrUrl, BarcodeFormat.QR_CODE, 512, 512)
+                    val bmp = Bitmap.createBitmap(512, 512, Bitmap.Config.RGB_565)
+                    for (x in 0 until 512) {
+                        for (y in 0 until 512) {
+                            bmp.setPixel(x, y, if (matrix[x, y]) Color.BLACK else Color.WHITE)
+                        }
+                    }
+                    binding.qrCode.setImageBitmap(bmp)
+                }
+                binding.qrLoading.visibility = View.GONE
+                binding.qrCode.visibility = View.VISIBLE
+                binding.smartCode.text = code
+                binding.smartCode.visibility = View.VISIBLE
+                binding.pollingStatus.isVisible = true
+
+                countdownJob = launch {
+                    for (remaining in 600 downTo 0) {
+                        binding.ttlCountdown.text = getString(R.string.tv_pairing_expires_in, remaining)
+                        binding.ttlCountdown.isVisible = true
+                        delay(1000)
+                    }
+                    pollingJob?.cancel()
+                    binding.pollingStatus.isVisible = false
+                    binding.ttlCountdown.text = getString(R.string.tv_pairing_expired)
+                    binding.regenerateButton.isVisible = true
+                }
+
+                pollingJob = launch {
+                    while (isActive) {
+                        delay(3000L)
+                        val arl = pollWorker(code) ?: continue
+                        countdownJob?.cancel()
+                        loginViewModel.onSmartLoginComplete(arl)
+                        return@launch
+                    }
+                }
+            }
+        }
+
+        private suspend fun pollWorker(code: String): String? = withContext(Dispatchers.IO) {
+            try {
+                val conn = java.net.URL("https://echo-pairing.schwertley.workers.dev/pair/$code")
+                    .openConnection() as java.net.HttpURLConnection
+                conn.connectTimeout = 8000
+                conn.readTimeout = 8000
+                if (conn.responseCode == 200) {
+                    val body = conn.inputStream.bufferedReader().readText()
+                    org.json.JSONObject(body).optString("arl", "").takeIf { it.isNotEmpty() }
+                } else null
+            } catch (e: Exception) { null }
+        }
+
+        override fun onDestroyView() {
+            super.onDestroyView()
+            pollingJob?.cancel()
+            countdownJob?.cancel()
         }
     }
 }

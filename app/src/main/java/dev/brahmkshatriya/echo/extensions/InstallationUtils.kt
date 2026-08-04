@@ -1,6 +1,7 @@
 package dev.brahmkshatriya.echo.extensions
 
 import android.app.Activity
+import android.util.Log
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
@@ -12,6 +13,7 @@ import dev.brahmkshatriya.echo.extensions.repo.ExtensionParser.Companion.PACKAGE
 import dev.brahmkshatriya.echo.extensions.repo.FileRepository.Companion.getExtensionsFileDir
 import dev.brahmkshatriya.echo.utils.ContextUtils.getTempFile
 import dev.brahmkshatriya.echo.utils.PermsUtils.registerActivityResultLauncher
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -45,9 +47,8 @@ object InstallationUtils {
         val newFile = File(dir, "$id.apk")
         dir.setWritable(true)
         newFile.setWritable(true)
-        if (newFile.exists())
-            if (!newFile.delete())
-                throw IllegalStateException("Failed to delete existing file: $newFile")
+        if (newFile.exists() && !newFile.delete())
+            Log.d("InstallUtils", "Failed to delete existing file: $newFile")
         tempFile.renameTo(newFile)
         newFile.setWritable(false)
         dir.setReadOnly()
@@ -85,9 +86,29 @@ object InstallationUtils {
             putExtra(Intent.EXTRA_RETURN_RESULT, true)
         }
         val result = activity.waitForResult(intent)
-        if (result.resultCode != Activity.RESULT_OK) {
-            val errorCode = result.data?.extras?.getInt("android.intent.extra.INSTALL_RESULT")
-            throw Exception("Failed to uninstall extension: $errorCode")
+        when (result.resultCode) {
+            Activity.RESULT_OK -> {} // uninstalled
+            Activity.RESULT_CANCELED ->
+                // User backed out of the system uninstall dialog (or it aborted with no detail) — NOT a
+                // failure. Signal it the way the caller (ExtensionsViewModel) already handles cancellation:
+                // a CancellationException is rethrown there without a "uninstalled" message and without
+                // emitting to the error flow. That's what stops the "Failed to uninstall extension: null"
+                // snackbar and the crash-reporter non-fatal on a plain cancel.
+                throw CancellationException("Uninstall cancelled by user")
+
+            else -> {
+                // Genuine failure (e.g. RESULT_FIRST_USER). The legacy ACTION_DELETE result carries an int
+                // status in EXTRA_INSTALL_RESULT (there is no PackageInstaller EXTRA_STATUS_MESSAGE on this
+                // path); surface the resultCode and that status so a real failure is diagnosable instead of
+                // the old bare "null".
+                val status = result.data?.extras
+                    ?.getInt("android.intent.extra.INSTALL_RESULT", Int.MIN_VALUE)
+                    ?.takeIf { it != Int.MIN_VALUE }
+                throw Exception(
+                    "Failed to uninstall extension (resultCode=${result.resultCode}" +
+                        (status?.let { ", status=$it" } ?: "") + ")"
+                )
+            }
         }
     }
 
@@ -99,7 +120,7 @@ object InstallationUtils {
         file.parentFile!!.setWritable(true)
         file.setWritable(true)
         if (file.exists() && !file.delete())
-            throw IllegalStateException("Failed to delete file: $file")
+            Log.d("InstallUtils", "Failed to delete file: $file")
         fileIgnoreFlow.emit(null)
     }
 

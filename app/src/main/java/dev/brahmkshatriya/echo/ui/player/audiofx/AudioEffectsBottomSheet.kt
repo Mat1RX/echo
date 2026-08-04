@@ -1,6 +1,7 @@
 package dev.brahmkshatriya.echo.ui.player.audiofx
 
 import android.annotation.SuppressLint
+import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
 import android.media.audiofx.AudioEffect
@@ -16,9 +17,11 @@ import androidx.fragment.app.Fragment
 import androidx.lifecycle.viewModelScope
 import com.google.android.material.bottomsheet.BottomSheetDialogFragment
 import dev.brahmkshatriya.echo.R
+import dev.brahmkshatriya.echo.common.models.Message
 import dev.brahmkshatriya.echo.databinding.DialogPlayerAudioFxBinding
 import dev.brahmkshatriya.echo.databinding.FragmentAudioFxBinding
 import dev.brahmkshatriya.echo.playback.listener.EffectsListener.Companion.BASS_BOOST
+import dev.brahmkshatriya.echo.playback.PlayerService.Companion.LOUDNESS_NORMALIZATION
 import dev.brahmkshatriya.echo.playback.listener.EffectsListener.Companion.CHANGE_PITCH
 import dev.brahmkshatriya.echo.playback.listener.EffectsListener.Companion.CUSTOM_EFFECTS
 import dev.brahmkshatriya.echo.playback.listener.EffectsListener.Companion.PLAYBACK_SPEED
@@ -26,6 +29,7 @@ import dev.brahmkshatriya.echo.playback.listener.EffectsListener.Companion.delet
 import dev.brahmkshatriya.echo.playback.listener.EffectsListener.Companion.getFxPrefs
 import dev.brahmkshatriya.echo.playback.listener.EffectsListener.Companion.globalFx
 import dev.brahmkshatriya.echo.playback.listener.EffectsListener.Companion.speedRange
+import dev.brahmkshatriya.echo.utils.ContextUtils.getSettings
 import dev.brahmkshatriya.echo.ui.player.PlayerViewModel
 import dev.brahmkshatriya.echo.utils.ContextUtils.observe
 import dev.brahmkshatriya.echo.utils.PermsUtils.registerActivityResultLauncher
@@ -60,7 +64,9 @@ class AudioEffectsBottomSheet : BottomSheetDialogFragment() {
             binding.audioFxDescription.isVisible = mediaId != null
             val mediaSettings =
                 requireContext().getFxPrefs(settings, mediaId?.hashCode()) ?: settings
-            binding.audioFxFragment.bind(mediaSettings) { onEqualizerClicked() }
+            binding.audioFxFragment.bind(
+                mediaSettings, requireContext().getSettings()
+            ) { onEqualizerClicked() }
         }
         observe(viewModel.playerState.current) {
             mediaId = it?.mediaItem?.mediaId
@@ -85,7 +91,9 @@ class AudioEffectsBottomSheet : BottomSheetDialogFragment() {
     companion object {
         @SuppressLint("SetTextI18n")
         fun FragmentAudioFxBinding.bind(
-            settings: SharedPreferences, onEqualizerClicked: () -> Unit
+            settings: SharedPreferences,
+            appSettings: SharedPreferences,
+            onEqualizerClicked: () -> Unit,
         ) {
             val speed = settings.getInt(PLAYBACK_SPEED, speedRange.indexOf(1f))
             val adapter = RulerAdapter(object : RulerAdapter.Listener<Int> {
@@ -106,12 +114,58 @@ class AudioEffectsBottomSheet : BottomSheetDialogFragment() {
             pitchSwitch.setOnCheckedChangeListener { _, isChecked ->
                 settings.edit { putBoolean(CHANGE_PITCH, isChecked) }
             }
+            // Note: System Equalizer is an external OS panel launched via Intent and attached to the audio session ID.
+            // It is independent of the app's internal PCM post-processing pipeline (AudioEffectsProcessor / BassBoost),
+            // so we do not disable the system equalizer button when internal audio processing is toggled off.
+            fun updateProcessingUi(isEnabled: Boolean) {
+                bassBoostSlider.isEnabled = isEnabled
+                loudnessNormalizationSwitch.isEnabled = isEnabled
+                loudnessNormalization.alpha = if (isEnabled) 1.0f else 0.5f
+            }
+
+            audioProcessingSwitch.isChecked = appSettings.getBoolean(dev.brahmkshatriya.echo.playback.PlayerService.Companion.AUDIO_PROCESSING_ENABLED, true)
+            audioProcessing.setOnClickListener {
+                audioProcessingSwitch.isChecked = !audioProcessingSwitch.isChecked
+            }
+            audioProcessingSwitch.setOnCheckedChangeListener { _, isChecked ->
+                appSettings.edit { putBoolean(dev.brahmkshatriya.echo.playback.PlayerService.Companion.AUDIO_PROCESSING_ENABLED, isChecked) }
+                updateProcessingUi(isChecked)
+            }
             bassBoostSlider.value = settings.getInt(BASS_BOOST, 0).toFloat()
             bassBoostSlider.addOnChangeListener { _, value, _ ->
                 settings.edit { putInt(BASS_BOOST, value.toInt()) }
             }
-            equalizer.setOnClickListener { onEqualizerClicked() }
+            // Hide the equalizer row entirely on devices with no system EQ app — the
+            // DISPLAY_AUDIO_EFFECT_CONTROL_PANEL intent resolves to nothing (e.g. some Huawei/Honor
+            // tablets like the PGT-N19) — so the user never taps a dead button. Reads the cached
+            // resolveActivity result (hasSystemEqualizer); the manifest <queries> entry keeps it
+            // reliable under API 30+ package visibility.
+            val hasEqualizer = hasSystemEqualizer(equalizer.context)
+            equalizer.isVisible = hasEqualizer
+            if (hasEqualizer) equalizer.setOnClickListener { onEqualizerClicked() }
+
+            loudnessNormalizationSwitch.isChecked = appSettings.getBoolean(LOUDNESS_NORMALIZATION, false)
+            loudnessNormalization.setOnClickListener {
+                if (audioProcessingSwitch.isChecked) {
+                    loudnessNormalizationSwitch.isChecked = !loudnessNormalizationSwitch.isChecked
+                }
+            }
+            loudnessNormalizationSwitch.setOnCheckedChangeListener { _, isChecked ->
+                appSettings.edit { putBoolean(LOUDNESS_NORMALIZATION, isChecked) }
+            }
+
+            // Apply initial UI state
+            updateProcessingUi(audioProcessingSwitch.isChecked)
         }
+
+        // System-EQ presence is fixed for the process lifetime — only an app install/uninstall could
+        // change it, which is rare and acceptable to ignore — so resolve the intent once and reuse the
+        // cached Boolean for both the bind-time hide and the tap-time backstop. Companion-scoped, so it
+        // survives sheet re-creation within a session and is only re-evaluated on a fresh process.
+        private var systemEqualizerAvailable: Boolean? = null
+        private fun hasSystemEqualizer(context: Context) =
+            systemEqualizerAvailable ?: (Intent(AudioEffect.ACTION_DISPLAY_AUDIO_EFFECT_CONTROL_PANEL)
+                .resolveActivity(context.packageManager) != null).also { systemEqualizerAvailable = it }
 
         private fun openEqualizer(activity: ComponentActivity, sessionId: Int) {
             val intent = Intent(AudioEffect.ACTION_DISPLAY_AUDIO_EFFECT_CONTROL_PANEL).apply {
@@ -125,10 +179,21 @@ class AudioEffectsBottomSheet : BottomSheetDialogFragment() {
 
         fun Fragment.onEqualizerClicked() {
             val viewModel by activityViewModel<PlayerViewModel>()
-            val sessionId = viewModel.playerState.session.value
-            runCatching { openEqualizer(requireActivity(), sessionId) }.getOrElse {
-                viewModel.run { viewModelScope.launch { app.throwFlow.emit(it) } }
+            val activity = requireActivity()
+            val message = getString(R.string.no_system_equalizer)
+            // Defense-in-depth backstop: the button is already hidden at bind time when no EQ resolves,
+            // but resolveActivity can false-positive under package visibility, or the handler can vanish
+            // between check and launch. Show a clear message, never the raw ActivityNotFoundException,
+            // and never let it throw.
+            fun showNoEqualizer() {
+                viewModel.run { viewModelScope.launch { app.messageFlow.emit(Message(message)) } }
             }
+            if (!hasSystemEqualizer(activity)) {
+                showNoEqualizer()
+                return
+            }
+            val sessionId = viewModel.playerState.session.value
+            runCatching { openEqualizer(activity, sessionId) }.getOrElse { showNoEqualizer() }
         }
     }
 }
