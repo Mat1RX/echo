@@ -37,7 +37,7 @@ ExtensionAdapter(
             oldItem.id == newItem.id
 
         override fun areContentsTheSame(oldItem: Extension<*>, newItem: Extension<*>) =
-            oldItem == newItem
+            oldItem.metadata == newItem.metadata
     }
 
     private val empty = EmptyAdapter()

@@ -825,6 +825,21 @@ class PlayerFragment : Fragment() {
 
     @OptIn(UnstableApi::class)
     private fun applyPlayer() {
+        // Canvas/video is fullscreen-only. When NOT expanded (mini-bar / hidden), DETACH the video surface so
+        // the Canvas/video stops rendering in the collapsed bar. `playerView.player = null` clears ONLY the
+        // view's video surface (clearVideoSurface); the actual playback lives in the service player behind
+        // the MediaController (mainPlayer), so AUDIO IS UNAFFECTED — it keeps playing while collapsed. The
+        // static bg_image (blurred art) shows instead. Video/Canvas re-attaches on expand (below), rendering
+        // at the live position. Setting isVisible alone did NOT stop the SurfaceView-backed PlayerView —
+        // detaching the surface is the reliable stop (the true analog of KenBurns' animator pause).
+        if (uiViewModel.playerSheetState.value != STATE_EXPANDED) {
+            binding?.playerView?.player = null
+            backgroundPlayer?.playWhenReady = false   // no-op for the main-player video path (null); pauses
+                                                      // the silent Canvas loop in the background-streamable case
+            binding?.playerView?.isVisible = false
+            binding?.bgImage?.isVisible = true
+            return
+        }
         val mainPlayer = viewModel.browser.value
         val background = viewModel.playerState.current.value?.mediaItem?.background
         val visible = if (mainPlayer.hasVideo()) {
@@ -841,6 +856,7 @@ class PlayerFragment : Fragment() {
             }
             binding?.playerView?.player = backgroundPlayer
             binding?.playerView?.resizeMode = RESIZE_MODE_ZOOM
+            backgroundPlayer?.playWhenReady = true   // resume a Canvas that was paused on collapse
             true
         } else {
             backgroundPlayer?.release()
