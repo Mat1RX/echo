@@ -32,10 +32,19 @@ class RawDataSource : BaseDataSource(true) {
             }
         } catch (e: IOException) {
             throw e                     // already the recoverable type — pass through unchanged
-        } catch (e: CancellationException) {
-            throw e                     // loader cancellation must propagate untouched (not an error)
         } catch (e: InterruptedException) {
             throw e                     // loader-thread interrupt must propagate untouched
+        } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
+            // Extension-internal network/resolve timeout. Wrap as IOException so ExoPlayer treats it as a
+            // recoverable load error (triggering standard retries/error policies) instead of an unexpected loader crash.
+            throw IOException(e)
+        } catch (e: CancellationException) {
+            // Extension-internal coroutine cancellation. If the loader thread itself was interrupted by ExoPlayer,
+            // rethrow CancellationException. Otherwise, wrap as IOException to avoid UnexpectedLoaderException.
+            if (Thread.currentThread().isInterrupted) {
+                throw e
+            }
+            throw IOException(e)
         } catch (e: Exception) {
             // A failed extension stream-resolve throws AppException (wrapping the real UnknownHostException),
             // a NON-IOException. DataSource.open() is contracted to throw IOException, and Media3's Loader only
