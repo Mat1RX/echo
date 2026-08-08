@@ -2,6 +2,8 @@ package dev.brahmkshatriya.echo.widget
 
 import android.graphics.Bitmap
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
@@ -20,15 +22,20 @@ class WidgetPlayerListener(
     var controller: MediaController? = null
     private var result: ListenableFuture<SessionResult>? = null
     private var image: Bitmap? = null
+    private val mainHandler = Handler(Looper.getMainLooper())
+
     private fun getImage() {
         result?.cancel(true)
         val future = controller?.sendCustomCommand(imageCommand, Bundle.EMPTY)
         future?.addListener({
-            val result = future.get()
+            // Custom command future completes on the session's IO worker thread (PlayerCallback uses
+            // scope.future -> Dispatchers.IO), so MediaController calls inside update(image) must run on
+            // the main thread. Cancelled or raced futures throw CancellationException on get() — swallow it.
+            val result = runCatching { future.get() }.getOrNull()
             if (result?.resultCode == SessionResult.RESULT_SUCCESS) {
                 image = result.extras.getParcel<Bitmap>("image")
-                update(image)
             }
+            mainHandler.post { update(image) }
         }, MoreExecutors.directExecutor())
         result = future
     }
