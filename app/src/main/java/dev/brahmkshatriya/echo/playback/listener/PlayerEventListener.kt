@@ -442,7 +442,12 @@ class PlayerEventListener(
     }
 
     companion object {
-        private const val BUFFERING_WATCHDOG_MS = 5_000L
+        // Buffering watchdog timeout. Must be significantly longer than the extension's internal network
+        // timeout (e.g. an extension's 10s TimeoutCancellationException) so the extension has time to throw a
+        // real network error (which triggers proper retries in onPlayerError). If this watchdog fires
+        // too early, it forcefully skips a track just because the network is slightly slow, bypassing
+        // normal error handling. 20s allows the extension's 10s timeout to confidently fire first.
+        private const val BUFFERING_WATCHDOG_MS = 20_000L
         // Cold-start re-seek belt: only re-apply the saved position if the current position is still at the
         // start. A user seek before the first STATE_READY moves it past this, and we leave their choice.
         private const val RESTORE_SEEK_BELT_MS = 1_000L
@@ -451,8 +456,8 @@ class PlayerEventListener(
         // at song start — a reboot/OS-kill/crash then resumes at 0. 5s loses at most ~5s of position and
         // writes a tiny POSITION-only file at most 12×/min while playing (negligible).
         private const val POSITION_SAVE_INTERVAL_MS = 5_000L
-        // ≥ Deezer stream-resolution ceiling: DeezerApi clientNP connect 15s + read 10s;
-        // getContentLength 10s. If clientNP ever gains a callTimeout, anchor to that instead.
+        // ≥ Extension stream-resolution ceiling: network connect 15s + read 10s;
+        // getContentLength 10s. If an extension ever gains a callTimeout, anchor to that instead.
         private const val COLD_GRACE_MS = 25_000L
         // Bounds for enriched skip-cause reporting (safeCause) — keep the Crashlytics non-fatal small and
         // spiral-proof: per-cause detail is capped, and only maxConsecutiveUnavailableSkips (3) causes are
